@@ -12,6 +12,7 @@
 #include <windows.h>
 #include <tchar.h>
 
+#include "wrc-protocol.h"
 #include "common.hpp"
 
 #define logf(fmt,...) do {                             \
@@ -113,7 +114,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
     break;
   default:
     return DefWindowProc(hwnd, message, wParam, lParam);
-    break;
   }
 
   return 0;
@@ -143,18 +143,18 @@ static passfail RegisterWinClass(HINSTANCE hInstance)
   return pass;
 }
 
-static passfail SendFull(SOCKET s, char *buf, int len)
+static passfail SendFull(SOCKET s, unsigned char *buf, int len)
 {
   int total = 0;
   while (total < len) {
-    int sent = send(s, buf + total, len - total, 0);
+    int sent = send(s, (char*)buf + total, len - total, 0);
     if (sent <= 0)
       return fail;
     total += sent;
   }
   return pass;
 }
-static passfail GlobalSockSendFull(char *buf, int len)
+static void GlobalSockSendFull(unsigned char *buf, int len)
 {
   assert(global_sock != INVALID_SOCKET);
   assert(global_sock_connected);
@@ -164,28 +164,22 @@ static passfail GlobalSockSendFull(char *buf, int len)
     closesocket(global_sock);
     global_sock = INVALID_SOCKET;
     InvalidateRect(global_hwnd, NULL, TRUE);
-    return fail;
+    //return fail;
   }
-  return pass;
+  //return pass;
 }
 
-static void U32ToBytesBigEndian(char *buf, DWORD num)
-{
-  buf[0] = num >> 24;
-  buf[1] = num >> 16;
-  buf[2] = num >>  8;
-  buf[3] = num >>  0;
-}
-
-static passfail SendMouseMove(LONG x, LONG y)
+static void SendMouseMove(LONG x, LONG y)
 {
   if (global_sock_connected) {
     assert(global_sock != INVALID_SOCKET);
-    char buf[9];
-    buf[0] = 1; // MouseMove
-    U32ToBytesBigEndian(buf + 1, x);
-    U32ToBytesBigEndian(buf + 2, y);
-    return GlobalSockSendFull(buf, 9);
+
+    // NOTE: x and y can be out of range of the resolution
+    unsigned char buf[9];
+    buf[0] = MOUSE_MOVE;
+    I32ToBytesBigEndian(buf + 1, x);
+    I32ToBytesBigEndian(buf + 5, y);
+    GlobalSockSendFull(buf, 9);
   }
 }
 
@@ -216,7 +210,8 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam)
       global_mouse_right_button_down = 0;
       do_invalidate = 1;
     } else {
-      logf("MouseProc: HC_ACTION unknown windows message %lld (0x%llx)", wParam, wParam);
+      logf("MouseProc: HC_ACTION unknown windows message %lld (0x%llx)",
+	   (unsigned long long)wParam, (unsigned long long)wParam);
     }
   } else if (nCode == HC_NOREMOVE) {
     global_mouse_msg_hc_noremove += 1;
@@ -235,26 +230,24 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam)
 
 
 
-
-static passfail StartConnect3(SOCKET s, bool connected)
-{
-  if (0 != WSAAsyncSelect(s, global_hwnd, WM_USER_SOCKET, FD_CLOSE | (connected ? 0 : FD_CONNECT))) {
-    MessageBoxF("WSAAsyncSelect failed with %d", WSAGetLastError());
-    return fail;
-  }
-  return pass;
-}
-static passfail StartConnect2(const sockaddr_in *addr, SOCKET s, bool *out_connected)
+static passfail StartConnect2(const sockaddr_in *addr, SOCKET s)
 {
   if (pass != SetNonBlocking(s)) {
     MessageBoxF("failed to set socket to non-blocking with %d", GetLastError());
     return fail;
   }
 
-  bool connected = false;
+  // I've moved the WSAAsyncSelect call to come before calling connect, this
+  // seems to solve some sort of race condition where the connect message will
+  // get dropped.
+  if (0 != WSAAsyncSelect(s, global_hwnd, WM_USER_SOCKET, FD_CLOSE | FD_CONNECT)) {
+    MessageBoxF("WSAAsyncSelect failed with %d", WSAGetLastError());
+    return fail;
+  }
+
+  // I think we will always get an FD_CONNECT event
   if (0 == connect(s, (sockaddr*)addr, sizeof(*addr))) {
     logf("immediate connect!");
-    connected = true;
   } else {
     DWORD lastError = WSAGetLastError();
     if (lastError != WSAEWOULDBLOCK) {
@@ -263,12 +256,6 @@ static passfail StartConnect2(const sockaddr_in *addr, SOCKET s, bool *out_conne
       return fail;
     }
   }
-
-  if (pass != StartConnect3(s, connected)) {
-    shutdown(s, SD_BOTH);
-    return fail;
-  }
-  *out_connected = connected;
   return pass;
 }
 // Success if global_sock != INVALID_SOCKET
@@ -281,10 +268,8 @@ static void StartConnect(const sockaddr_in *addr)
     MessageBoxF("socket function failed with %d", GetLastError());
     return;
   }
-  bool connected = false;
-  if (pass == StartConnect2(addr, s, &connected)) {
+  if (pass == StartConnect2(addr, s)) {
     global_sock = s; // success
-    global_sock_connected = connected;
   } else {
     closesocket(s); // fail because global_sock is stil INVALID_SOCKET
   }

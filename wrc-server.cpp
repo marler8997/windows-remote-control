@@ -5,6 +5,7 @@
 #include <winsock2.h>
 #include <windows.h>
 
+#include "wrc-protocol.h"
 #include "common.hpp"
 
 #define logf(fmt,...) printf(fmt "\n", ##__VA_ARGS__)
@@ -12,7 +13,7 @@
 
 struct Client {
   SOCKET sock;
-  char buffer[100];
+  unsigned char buffer[100];
   unsigned data_len;
   Client() : sock(INVALID_SOCKET)
   {
@@ -29,8 +30,17 @@ struct Client {
 // returns: length of command on success
 //          0 if a partial command was received,
 //          len + 1 on error (logs errors)
-static unsigned ProcessCommand(char *cmd, unsigned len)
+static unsigned ProcessCommand(unsigned char *cmd, unsigned len)
 {
+  if (cmd[0] == MOUSE_MOVE) {
+    if (len < 9)
+      return 0; // need more data
+    LONG x = BytesToI32BigEndian(cmd+1);
+    LONG y = BytesToI32BigEndian(cmd+5);
+    logf("WARNING: mouse move %d x %d not implemented", x, y);
+    return 9;
+  }
+  /*
   if (cmd[0] == 'a') {
     logf("got 'a'");
     return 1;
@@ -39,12 +49,13 @@ static unsigned ProcessCommand(char *cmd, unsigned len)
     logf("got newline");
     return 1;
   }
+  */
   errorf("unknown comand 0x%02x", cmd[0]);
   return len + 1; // error
 }
 
 // returns: len + 1 on error and logs errors
-static unsigned ProcessClientData(char *data, unsigned len)
+static unsigned ProcessClientData(unsigned char *data, unsigned len)
 {
   unsigned offset = 0;
   for (;;) {
@@ -62,7 +73,7 @@ static unsigned ProcessClientData(char *data, unsigned len)
 
 static void HandleClientSock(Client *client)
 {
-  int len = recv(client->sock, client->buffer + client->data_len, sizeof(client->buffer) - client->data_len, 0);
+  int len = recv(client->sock, (char*)client->buffer + client->data_len, sizeof(client->buffer) - client->data_len, 0);
   if (len <= 0) {
     if (len == 0) {
       logf("client closed connection");
