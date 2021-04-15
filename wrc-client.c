@@ -30,6 +30,8 @@ static void MessageBoxF(const char *fmt, ...)
   MessageBoxA(NULL, buffer, "Windows Remote Control", 0);
 }
 
+//static LARGE_INTEGER global_tick_frequency;
+static float global_tick_frequency;
 static FILE *global_logfile;
 static HWND global_hwnd;
 
@@ -45,6 +47,7 @@ static POINT global_mouse_point = {0, 0};
 
 static SOCKET global_sock = INVALID_SOCKET;
 static bool global_sock_connected = false;
+static LARGE_INTEGER last_send_mouse_move_tick = {0};
 
 static void RenderStringMax300(HDC hdc, int column, int row, const TCHAR *fmt, ...)
 {
@@ -175,6 +178,25 @@ static void SendMouseMove(LONG x, LONG y)
   if (global_sock_connected) {
     assert(global_sock != INVALID_SOCKET);
 
+    const bool limit_mouse_move_bandwidth = true;
+    if (limit_mouse_move_bandwidth) {
+      LARGE_INTEGER now;
+      if (!QueryPerformanceCounter(&now)) {
+        logf("Error: QueryPerformanceCounter failed with %lu", GetLastError());
+        assert(false);
+      }
+      LONGLONG diff_ticks = now.QuadPart - last_send_mouse_move_tick.QuadPart;
+      float diff_sec = (float)diff_ticks / global_tick_frequency;
+      // drop the mouse move if it is too soon for now, this could help
+      // with latency by not flooding the network
+      if (diff_sec < 0.005) {
+        //logf("mouse move diff %f seconds (%lld ticks) DROPPING!", diff_sec, diff_ticks);
+        return;
+      }
+      //logf("mouse move diff %f seconds (%lld ticks)", diff_sec, diff_ticks);
+      last_send_mouse_move_tick = now;
+    }
+
     // NOTE: x and y can be out of range of the resolution
     unsigned char buf[9];
     buf[0] = MOUSE_MOVE;
@@ -293,6 +315,15 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
     return 1;
   }
   logf("started");
+
+  {
+    LARGE_INTEGER tick_frequency;
+    if (!QueryPerformanceFrequency(&tick_frequency)) {
+      MessageBoxF("QueryPerformanceFrequency failed with %lu", GetLastError());
+      return 1;
+    }
+    global_tick_frequency = (float)tick_frequency.QuadPart;
+  }
 
   {
     int error = CallWSAStartup();

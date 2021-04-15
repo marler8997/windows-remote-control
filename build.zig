@@ -36,6 +36,7 @@ pub fn build(b: *std.build.Builder) void {
         // NOTE: these should be added with the pragmas inside the source file
         //       but pragmas aren't working for cross-compilation
         //           https://github.com/ziglang/zig/issues/8544
+        exe.linkSystemLibrary("user32");
         exe.linkSystemLibrary("ws2_32");
     }
 }

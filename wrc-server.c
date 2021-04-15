@@ -1,3 +1,4 @@
+#pragma comment(lib, "user32.lib")
 #pragma comment(lib, "ws2_32.lib")
 
 #include <assert.h>
