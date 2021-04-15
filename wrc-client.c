@@ -8,12 +8,13 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
 #include <winsock2.h>
 #include <windows.h>
 #include <tchar.h>
 
 #include "wrc-protocol.h"
-#include "common.hpp"
+#include "common.h"
 
 #define logf(fmt,...) do {                             \
     fprintf(global_logfile, fmt "\n", ##__VA_ARGS__);  \
@@ -26,7 +27,7 @@ static void MessageBoxF(const char *fmt, ...)
   va_list args;
   va_start(args, fmt);
   vsnprintf(buffer, sizeof(buffer), fmt, args);
-  MessageBoxA(NULL, buffer, "Windows Remote Control", NULL);
+  MessageBoxA(NULL, buffer, "Windows Remote Control", 0);
 }
 
 static FILE *global_logfile;
@@ -228,8 +229,6 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam)
 
 
 
-
-
 static passfail StartConnect2(const sockaddr_in *addr, SOCKET s)
 {
   if (pass != SetNonBlocking(s)) {
@@ -347,6 +346,8 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
   UpdateWindow(global_hwnd);
 
 
+  // TODO: I think I can simplify this message loop this because
+  //       I ended up use WSAAsyncSelect for my socket events
   DWORD handle_count = 0;
   while (true) {
     //logf("[DEBUG] waiting for event...");
@@ -354,10 +355,6 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
     if (wait_result == WAIT_OBJECT_0 + handle_count) {
       MSG msg;
       while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
-        //logf("[DEBUG] new message %d", msg.message);
-        if (wait_result == WAIT_TIMEOUT) {
-          logf("    WARNING!!!");
-        }
         if (msg.message == WM_QUIT) {
           PostQuitMessage(msg.wParam);
           return msg.wParam;

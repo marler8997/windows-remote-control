@@ -6,24 +6,29 @@
 #include <windows.h>
 
 #include "wrc-protocol.h"
-#include "common.hpp"
+#include "common.h"
 
 #define logf(fmt,...) printf(fmt "\n", ##__VA_ARGS__)
 #define errorf(fmt,...) printf("Error: " fmt "\n", ##__VA_ARGS__)
 
-struct Client {
+typedef struct {
   SOCKET sock;
   unsigned char buffer[100];
   unsigned data_len;
-  Client() : sock(INVALID_SOCKET)
-  {
-  }
-  void init(SOCKET sock)
-  {
-    this->sock = sock;
-    this->data_len = 0;
-  }
-};
+} Client;
+
+Client Client_initInvalid()
+{
+  Client client = {INVALID_SOCKET};
+  return client;
+}
+
+void Client_setSock(Client *client, SOCKET sock)
+{
+  client->sock = sock;
+  client->data_len = 0;
+}
+
 
 
 // assumption: len > 0
@@ -37,7 +42,7 @@ static unsigned ProcessCommand(unsigned char *cmd, unsigned len)
       return 0; // need more data
     LONG x = BytesToI32BigEndian(cmd+1);
     LONG y = BytesToI32BigEndian(cmd+5);
-    logf("WARNING: mouse move %d x %d not implemented", x, y);
+    logf("WARNING: mouse move %ld x %ld not implemented", x, y);
     return 9;
   }
   /*
@@ -79,7 +84,7 @@ static void HandleClientSock(Client *client)
       logf("client closed connection");
     } else {
       int error = GetLastError();
-      if (error = WSAECONNRESET) {
+      if (error == WSAECONNRESET) {
         logf("client closed connection");
       } else {
         logf("recv function failed with %d", GetLastError());
@@ -111,13 +116,13 @@ static passfail HandleListenSock(SOCKET listen_sock, Client *client)
   int fromlen = sizeof(from);
   SOCKET new_sock = accept(listen_sock, (sockaddr*)&from, &fromlen);
   if (new_sock == INVALID_SOCKET) {
-    errorf("accept function failed with {}", GetLastError());
+    errorf("accept function failed with %lu", GetLastError());
     return fail;
   }
-  logf("accepted connection from 0x%08x port %u",
+  logf("accepted connection from 0x%08lx port %u",
        ntohl(from.sin_addr.s_addr), ntohs(from.sin_port));
   if (client->sock == INVALID_SOCKET) {
-    client->init(new_sock);
+    Client_setSock(client, new_sock);
   } else {
     logf("refusing new client (already have client)");
     shutdown(new_sock, SD_BOTH);
@@ -130,16 +135,16 @@ static passfail ConfigureListenSock(SOCKET s, sockaddr_in* addr)
 {
   // TODO: do I need to set reuseaddr socket option?
   if (-1 == bind(s, (sockaddr*)addr, sizeof(*addr))) {
-    errorf("bind to address 0x%08x port %u failed with %d", ntohl(addr->sin_addr.s_addr),
+    errorf("bind to address 0x%08lx port %u failed with %lu", ntohl(addr->sin_addr.s_addr),
            ntohs(addr->sin_port), GetLastError());
     return fail;
   }
   if (-1 == listen(s, 0)) {
-    errorf("listen function failed with %d",GetLastError());
+    errorf("listen function failed with %lu",GetLastError());
     return fail;
   }
   if (pass != SetNonBlocking(s)) {
-    errorf("ioctlsocket function to set non-blocking failed with %d",GetLastError());
+    errorf("ioctlsocket function to set non-blocking failed with %lu", GetLastError());
     return fail;
   }
   return pass;
@@ -154,7 +159,7 @@ static SOCKET ListenPortNetworkOrder(u_short port_network_order)
 
   SOCKET s = socket(addr.sin_family, SOCK_STREAM, IPPROTO_TCP);
   if (s == INVALID_SOCKET) {
-    errorf("socket function failed with %d", GetLastError());
+    errorf("socket function failed with %lu", GetLastError());
     return INVALID_SOCKET;
   }
   if (pass != ConfigureListenSock(s, &addr)) {
@@ -166,7 +171,7 @@ static SOCKET ListenPortNetworkOrder(u_short port_network_order)
 
 void ServeLoop(SOCKET listen_sock)
 {
-  Client client = Client();
+  Client client = Client_initInvalid();
   
   while (true) {
     FD_SET read_set;
@@ -177,7 +182,7 @@ void ServeLoop(SOCKET listen_sock)
     }
     int popped = select(0, &read_set, NULL, NULL, NULL);
     if (popped == SOCKET_ERROR) {
-      errorf("select function failed with {}", GetLastError());
+      errorf("select function failed with %lu", GetLastError());
       return;
     }
     if (popped == 0) {
@@ -203,7 +208,7 @@ int main(int argc, char *argv[])
   {
     int error = CallWSAStartup();
     if (error != 0) {
-      errorf("WSAStartup failed with %d", GetLastError());
+      errorf("WSAStartup failed with %lu", GetLastError());
       return 1;
     }
   }

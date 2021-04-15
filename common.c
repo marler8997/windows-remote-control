@@ -1,6 +1,6 @@
 #include <winsock2.h>
 
-#include "common.hpp"
+#include "common.h"
 
 int CallWSAStartup() {
   WSADATA data;
