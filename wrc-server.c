@@ -42,7 +42,10 @@ static unsigned ProcessCommand(unsigned char *cmd, unsigned len)
       return 0; // need more data
     LONG x = BytesToI32BigEndian(cmd+1);
     LONG y = BytesToI32BigEndian(cmd+5);
-    logf("WARNING: mouse move %ld x %ld not implemented", x, y);
+    // TODO: need a way to disable this, possibly with a key press
+    if (!SetCursorPos(x, y)) {
+        errorf("SetCursorPos %ld %ld failed with %lu", x, y, GetLastError());
+    }
     return 9;
   }
   /*
