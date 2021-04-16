@@ -51,16 +51,17 @@ const global = struct {
     var tick_frequency: f32 = undefined;
     var hwnd: HWND = undefined;
 
-    // TODO: add ClientConfig struct
-    //var client_config: ClientConfig = undefined;
-
+    pub const remote = struct {
+        pub var enabled: bool = false;
+        pub var mouse_point: POINT = undefined;
+    };
     pub var mouse_msg_forward: u32 = 0;
     pub var mouse_msg_hc_action: u32 = 0;
     pub var mouse_msg_hc_noremove: u32 = 0;
     pub var mouse_msg_unknown: u32 = 0;
     pub var mouse_left_button_down: u8 = 0;
     pub var mouse_right_button_down: u8 = 0;
-    pub var mouse_point: POINT = .{.x = 0, .y = 0};
+    pub var local_mouse_point: POINT = undefined;
 
     pub var sock: SOCKET = INVALID_SOCKET;
     pub var sock_connected: bool = false;
@@ -121,6 +122,20 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) error{AlreadyReported}!void {
       return error.AlreadyReported;
     }
 
+    // NOTE: do this before adding the global mouse hook and before rendering the point in WM_PAINT
+    if (0 == GetCursorPos(&global.local_mouse_point)) {
+        messageBoxF("GetCursorPos failed with {}", .{GetLastError()});
+        return error.AlreadyReported;
+    }
+    // add global mouse hook
+    {
+        const hook = SetWindowsHookExA(WH_MOUSE_LL, mouseProc, hInstance, 0);
+        if (hook == null) {
+            messageBoxF("SetWindowsHookExA failed with {}", .{GetLastError()});
+            return error.AlreadyReported;
+        }
+    }
+
     {
         const wc = WNDCLASSEX {
             .cbSize         = @sizeOf(WNDCLASSEX),
@@ -158,15 +173,6 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) error{AlreadyReported}!void {
         messageBoxF("CreateWindow failed with {}", .{GetLastError()});
         return error.AlreadyReported;
     };
-
-    // add global mouse hook
-    {
-        const hook = SetWindowsHookExA(WH_MOUSE_LL, mouseProc, hInstance, 0);
-        if (hook == null) {
-            messageBoxF("SetWindowsHookExA failed with {}", .{GetLastError()});
-            return error.AlreadyReported;
-        }
-    }
 
     log("starting connect...", .{});
     {
@@ -243,12 +249,17 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
             }
 
             var mouse_row: i32 = 0;
-            renderStringMax300(hdc, 0, mouse_row + 0, "mouse {}x{}", .{global.mouse_point.x, global.mouse_point.y});
-            renderStringMax300(hdc, 1, mouse_row + 1, "forward: {}", .{global.mouse_msg_forward});
-            renderStringMax300(hdc, 1, mouse_row + 2, "hc_action: {}", .{global.mouse_msg_hc_action});
-            renderStringMax300(hdc, 1, mouse_row + 3, "hc_noremove: {}", .{global.mouse_msg_hc_noremove});
-            renderStringMax300(hdc, 1, mouse_row + 4, "unknown: {}", .{global.mouse_msg_unknown});
-            renderStringMax300(hdc, 1, mouse_row + 4, "buttons: leftdown={} rightdown={}", .{
+            renderStringMax300(hdc, 0, mouse_row + 0, "REMOTE: {}", .{global.remote.enabled});
+            const remote_mouse_point = if (global.remote.enabled) global.remote.mouse_point else POINT { .x = 0, .y = 0 };
+            renderStringMax300(hdc, 0, mouse_row + 1, "mouse {}x{} remote {}x{}", .{
+                global.local_mouse_point.x, global.local_mouse_point.y,
+                remote_mouse_point.x, remote_mouse_point.y,
+            });
+            renderStringMax300(hdc, 1, mouse_row + 2, "forward: {}", .{global.mouse_msg_forward});
+            renderStringMax300(hdc, 1, mouse_row + 3, "hc_action: {}", .{global.mouse_msg_hc_action});
+            renderStringMax300(hdc, 1, mouse_row + 4, "hc_noremove: {}", .{global.mouse_msg_hc_noremove});
+            renderStringMax300(hdc, 1, mouse_row + 5, "unknown: {}", .{global.mouse_msg_unknown});
+            renderStringMax300(hdc, 1, mouse_row + 6, "buttons: leftdown={} rightdown={}", .{
                                global.mouse_left_button_down, global.mouse_right_button_down});
             if (global.sock == INVALID_SOCKET) {
                 std.debug.assert(global.sock_connected == false);
@@ -260,8 +271,20 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
             }
             return 0;
         },
-        WM_DESTROY => {
-            PostQuitMessage(0);
+        WM_KEYDOWN => {
+            if (wParam == VK_ESCAPE) {
+                if (global.remote.enabled) {
+                    global.remote.enabled = false;
+                } else {
+                    global.remote.enabled = true;
+                    // TODO: initialize this correctly
+                    global.remote.mouse_point = .{
+                        .x = global.local_mouse_point.x,
+                        .y = global.local_mouse_point.y,
+                    };
+                }
+            }
+            invalidateRect();
             return 0;
         },
         WM_USER_SOCKET => {
@@ -289,6 +312,10 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
                    FD_CLOSE, FD_CONNECT, event});
                 PostQuitMessage(1);
             }
+            return 0;
+        },
+        WM_DESTROY => {
+            PostQuitMessage(0);
             return 0;
         },
         else => return DefWindowProc(hwnd, message, wParam, lParam),
@@ -320,7 +347,7 @@ fn globalSockSendFull(buf: []const u8) void {
     };
 }
 
-fn sendMouseMove(x: i32, y: i32) void {
+fn sendMouseMove(point: POINT) void {
     if (!global.sock_connected) {
         return;
     }
@@ -343,8 +370,8 @@ fn sendMouseMove(x: i32, y: i32) void {
     // NOTE: x and y can be out of range of the resolution
     var buf: [9]u8 = undefined;
     buf[0] = proto.mouse_move;
-    std.mem.writeIntBig(i32, buf[1..5], x);
-    std.mem.writeIntBig(i32, buf[5..9], y);
+    std.mem.writeIntBig(i32, buf[1..5], point.x);
+    std.mem.writeIntBig(i32, buf[5..9], point.y);
     globalSockSendFull(&buf);
 }
 
@@ -358,9 +385,19 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
         if (wParam == WM_MOUSEMOVE) {
             const data = @intToPtr(*MOUSEHOOKSTRUCT, @bitCast(usize, lParam));
             //log("[DEBUG] mousemove %dx%d", data.pt.x, data.pt.y);
-            global.mouse_point = data.pt;
+            if (global.remote.enabled) {
+                const diff_x = data.pt.x - global.local_mouse_point.x;
+                const diff_y = data.pt.y - global.local_mouse_point.y;
+                global.remote.mouse_point = POINT {
+                    .x = global.remote.mouse_point.x + diff_x,
+                    .y = global.remote.mouse_point.y + diff_y,
+                };
+                // TODO: check if next_remote_point != global.remote.r_mouse_point?
+                sendMouseMove(global.remote.mouse_point);
+            } else {
+                global.local_mouse_point = data.pt;
+            }
             do_invalidate = true;
-            sendMouseMove(data.pt.x, data.pt.y);
         } else if (wParam == WM_LBUTTONDOWN) {
             global.mouse_left_button_down = 1;
             do_invalidate = true;
@@ -386,6 +423,9 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
     if (do_invalidate) {
         // TODO: check for error?
         _ = InvalidateRect(global.hwnd, null, TRUE);
+    }
+    if (global.remote.enabled) {
+        return 1;
     }
     return CallNextHookEx(null, code, wParam, lParam);
 }
