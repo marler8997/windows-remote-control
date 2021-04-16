@@ -30,8 +30,24 @@ const WSAGETSELECTERROR = HIWORD;
 
 const WM_USER_SOCKET = WM_USER + 1;
 
+const Direction = enum { left, top, right, bottom };
+const Config = struct {
+    remote_host: ?[]const u8,
+    remote_direction: Direction,
+    remote_offset: u32,
+
+    pub fn default() Config {
+        return .{
+            .remote_host = null,
+            .remote_direction = .left,
+            .remote_offset = 0,
+        };
+    }
+};
+
 const global = struct {
     var logfile: std.fs.File = undefined;
+    var config: Config = Config.default();
     var tick_frequency: f32 = undefined;
     var hwnd: HWND = undefined;
 
@@ -52,18 +68,57 @@ const global = struct {
     pub var last_send_mouse_move_tick: u64 = 0;
 };
 
+
 pub export fn wWinMain(hInstance: HINSTANCE, removeme: HINSTANCE, pCmdLine: [*:0]u16, nCmdShow: c_int) callconv(WINAPI) c_int {
+    main2(hInstance, @intCast(u32, nCmdShow)) catch |e| switch (e) {
+        error.AlreadyReported => return 1,
+        else => |err| {
+            messageBoxF("fatal error {}", .{err});
+            return 1;
+        },
+    };
+    return 0;
+}
+fn main2(hInstance: HINSTANCE, nCmdShow: u32) error{AlreadyReported}!void {
     const log_filename = "wrc-client.log";
     global.logfile = std.fs.cwd().createFile(log_filename, .{}) catch |e| {
         messageBoxF("failed to open logfile '{s}': {}", .{log_filename, e});
-        return 1;
+        return error.AlreadyReported;
     };
     log("started", .{});
+
+    var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = &arena_allocator.allocator;
+
+    const config_filename = "wrc-client.json";
+    {
+        const config_file = std.fs.cwd().openFile(config_filename, .{}) catch |e| switch (e) {
+            error.FileNotFound => {
+                // in the future this will not be an error, the user can enter the remote
+                // host in a text box
+                //break :blk;
+                messageBoxF("currently you must specify the remote_host in '{s}' until I implement it in the UI", .{config_filename});
+                return error.AlreadyReported;
+            },
+            else => |err| {
+                messageBoxF("failed to open config '{s}': {}", .{config_filename, err});
+                return error.AlreadyReported;
+            },
+        };
+        defer config_file.close();
+        global.config = try loadConfig(allocator, config_filename, config_file);
+        if (global.config.remote_host) |_| { } else {
+            messageBoxF("{s} is missing the 'remote_host' field", .{config_filename});
+            return error.AlreadyReported;
+        }
+    }
+    // code currently assumes this is true
+    std.debug.assert(if (global.config.remote_host) |_| true else false);
 
     global.tick_frequency = @intToFloat(f32, std.os.windows.QueryPerformanceFrequency());
     if (common.wsaStartup()) |e| {
       messageBoxF("WSAStartup failed: {}", .{e});
-      return 1;
+      return error.AlreadyReported;
     }
 
     {
@@ -83,7 +138,8 @@ pub export fn wWinMain(hInstance: HINSTANCE, removeme: HINSTANCE, pCmdLine: [*:0
         };
         if (0 == RegisterClassEx(&wc)) {
             messageBoxF("RegisterWinClass failed with {}", .{GetLastError()});
-            return 1;
+            return error.AlreadyReported;
+
         }
     }
 
@@ -100,7 +156,7 @@ pub export fn wWinMain(hInstance: HINSTANCE, removeme: HINSTANCE, pCmdLine: [*:0
         null
     ) orelse {
         messageBoxF("CreateWindow failed with {}", .{GetLastError()});
-        return 1;
+        return error.AlreadyReported;
     };
 
     // add global mouse hook
@@ -108,23 +164,25 @@ pub export fn wWinMain(hInstance: HINSTANCE, removeme: HINSTANCE, pCmdLine: [*:0
         const hook = SetWindowsHookExA(WH_MOUSE_LL, mouseProc, hInstance, 0);
         if (hook == null) {
             messageBoxF("SetWindowsHookExA failed with {}", .{GetLastError()});
-            return 1;
+            return error.AlreadyReported;
         }
     }
 
     log("starting connect...", .{});
     {
         const port = 1234;
-        //const addr = std.net.Ip4Address.parse("127.0.0.1", port) catch unreachable;
-        //const addr = std.net.Ip4Address.parse("192.168.0.4", port) catch unreachable;
-        const addr = std.net.Ip4Address.parse("192.168.0.67", port) catch unreachable;
+        const addr = std.net.Ip4Address.parse(global.config.remote_host.?, 1234) catch |e| {
+            messageBoxF("failed to parse remote host '{s}' as an IP: {}", .{
+                global.config.remote_host.?, e});
+            return error.AlreadyReported;
+        };
         startConnect(&addr);
         if (global.sock == INVALID_SOCKET)
-            return 1; // error already logged
+            return error.AlreadyReported;
     }
 
     // TODO: check for errors?
-    _ = ShowWindow(global.hwnd, @intToEnum(SHOW_WINDOW_CMD, @intCast(u32, nCmdShow)));
+    _ = ShowWindow(global.hwnd, @intToEnum(SHOW_WINDOW_CMD, nCmdShow));
     _ = UpdateWindow(global.hwnd);
 
     {
@@ -134,7 +192,6 @@ pub export fn wWinMain(hInstance: HINSTANCE, removeme: HINSTANCE, pCmdLine: [*:0
             _ = DispatchMessage(&msg);
         }
     }
-    return 0;
 }
 
 fn log(comptime fmt: []const u8, args: anytype) void {
@@ -372,5 +429,87 @@ fn startConnect(addr: *const std.net.Ip4Address) void {
         global.sock = s; // success
     } else |_| {
         if (0 != closesocket(s)) unreachable; // fail because global.sock is stil INVALID_SOCKET
+    }
+}
+
+fn loadConfig(allocator: *std.mem.Allocator, filename: []const u8, config_file: std.fs.File) !Config {
+    const content = config_file.readToEndAlloc(allocator, 9999) catch |e| {
+        messageBoxF("failed to read config file '{s}': {}", .{filename, e});
+        return error.AlreadyReported;
+    };
+    var parser = std.json.Parser.init(allocator, false);
+    defer parser.deinit();
+    var tree = parser.parse(content) catch |e| {
+        messageBoxF("config file '{s}' is not valid JSON: {}", .{filename, e});
+        return error.AlreadyReported;
+    };
+    defer tree.deinit();
+
+    switch (tree.root) {
+        .Object => {},
+        else => {
+            messageBoxF("config file '{s}' is not a JSON object", .{filename});
+            return error.AlreadyReported;
+        },
+    }
+    const root_obj = tree.root.Object;
+    try jsonObjEnforceKnownFields(root_obj, &[_][]const u8 {
+        "remote_host",
+        "remote_direction",
+        "remote_offset",
+    }, filename);
+
+    var config = Config.default();
+    if (root_obj.get("remote_host")) |host_node| {
+        switch (host_node) {
+            .String => |host| {
+                if (config.remote_host) |_| {
+                    messageBoxF("in config file '{s}', got multiple values for remote_host", .{filename});
+                    return error.AlreadyReported;
+                }
+                config.remote_host = allocator.dupe(u8, host) catch @panic("out of memory");
+            },
+            else => {
+                messageBoxF("in config file '{s}', expected 'remote_host' to be a String but got {s}", .{
+                    filename, @tagName(host_node)});
+                return error.AlreadyReported;
+            }
+        }
+    }
+    return config;
+}
+
+pub fn SliceFormatter(comptime T: type, comptime spec: []const u8) type { return struct {
+    slice: []const T,
+    pub fn format(
+        self: @This(),
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        var first : bool = true;
+        for (self.slice) |e| {
+            if (first) {
+                first = false;
+            } else {
+                try writer.writeAll(", ");
+            }
+            try std.fmt.format(writer, "{" ++ spec ++ "}", .{e});
+        }
+    }
+};}
+pub fn fmtSliceT(comptime T: type, comptime spec: []const u8, slice: []const T) SliceFormatter(T, spec) {
+    return .{ .slice = slice };
+}
+
+fn jsonObjEnforceKnownFields(map: std.json.ObjectMap, known_fields: []const []const u8, file_for_error: []const u8) !void {
+    var it = map.iterator();
+    fieldLoop: while (it.next()) |kv| {
+        for (known_fields) |known_field| {
+            if (std.mem.eql(u8, known_field, kv.key))
+                continue :fieldLoop;
+        }
+        messageBoxF("{s}: Error: JSON object has unknown field '{s}', expected one of: {}\n", .{file_for_error, kv.key, fmtSliceT([]const u8, "s", known_fields)});
+        return error.AlreadyReported;
     }
 }
