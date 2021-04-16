@@ -17,14 +17,14 @@ const SOCKET = usize;
 // TODO: why is this not defined in zigwin32?
 const FIONBIO: i32 = -2147195266;
 
-fn SetBlockingMode(s: SOCKET, mode: u32) !void {
+fn setBlockingMode(s: SOCKET, mode: u32) !void {
     var mode_mutable: u32 = mode;
     if (0 != ioctlsocket(s, FIONBIO, &mode_mutable))
         return error.SetSocketBlockingError;
 }
-pub fn SetNonBlocking(s: SOCKET) !void {
-    return try SetBlockingMode(s, 1);
+pub fn setNonBlocking(s: SOCKET) !void {
+    return try setBlockingMode(s, 1);
 }
-pub fn SetBlocking(s: SOCKET) !void {
-    return try SetBlockingMode(s, 0);
+pub fn setBlocking(s: SOCKET) !void {
+    return try setBlockingMode(s, 0);
 }

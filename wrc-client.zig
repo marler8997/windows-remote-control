@@ -335,7 +335,7 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
 
 
 fn startConnect2(addr: *const std.net.Ip4Address, s: SOCKET) !void {
-    common.SetNonBlocking(s) catch |_| {
+    common.setNonBlocking(s) catch |_| {
         messageBoxF("failed to set socket to non-blocking with {}", .{GetLastError()});
         return error.ConnnectFail;
     };
