@@ -45,23 +45,34 @@ const Config = struct {
     }
 };
 
+const InputState = struct {
+    mouse_point: ?POINT,
+    mouse_left_down: ?bool,
+};
+
 const global = struct {
     var logfile: std.fs.File = undefined;
     var config: Config = Config.default();
     var tick_frequency: f32 = undefined;
     var hwnd: HWND = undefined;
 
+    pub var got_cursor_pos = false;
     pub const remote = struct {
         pub var enabled: bool = false;
-        pub var mouse_point: POINT = undefined;
+        pub var input: InputState = .{
+            .mouse_point = null,
+            .mouse_left_down = null,
+        };
     };
     pub var mouse_msg_forward: u32 = 0;
     pub var mouse_msg_hc_action: u32 = 0;
     pub var mouse_msg_hc_noremove: u32 = 0;
     pub var mouse_msg_unknown: u32 = 0;
-    pub var mouse_left_button_down: u8 = 0;
+    pub var local_input = InputState {
+        .mouse_point = null,
+        .mouse_left_down = null,
+    };
     pub var mouse_right_button_down: u8 = 0;
-    pub var local_mouse_point: POINT = undefined;
 
     pub var sock: SOCKET = INVALID_SOCKET;
     pub var sock_connected: bool = false;
@@ -122,11 +133,6 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) error{AlreadyReported}!void {
       return error.AlreadyReported;
     }
 
-    // NOTE: do this before adding the global mouse hook and before rendering the point in WM_PAINT
-    if (0 == GetCursorPos(&global.local_mouse_point)) {
-        messageBoxF("GetCursorPos failed with {}", .{GetLastError()});
-        return error.AlreadyReported;
-    }
     // add global mouse hook
     {
         const hook = SetWindowsHookExA(WH_MOUSE_LL, mouseProc, hInstance, 0);
@@ -238,6 +244,11 @@ fn invalidateRect() void {
     if (InvalidateRect(global.hwnd, null, TRUE) == 0) @panic("error that needs to be handled?");
 }
 
+fn fmtOptBool(opt_bool: ?bool) []const u8 {
+    if (opt_bool) |b| return if (b) "1" else "0";
+    return "?";
+}
+
 fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT {
     switch (message) {
         WM_PAINT => {
@@ -250,17 +261,19 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
 
             var mouse_row: i32 = 0;
             renderStringMax300(hdc, 0, mouse_row + 0, "REMOTE: {}", .{global.remote.enabled});
-            const remote_mouse_point = if (global.remote.enabled) global.remote.mouse_point else POINT { .x = 0, .y = 0 };
+            const local_mouse_point = if (global.local_input.mouse_point) |p| p else POINT { .x=0, .y=0 };
+            const remote_mouse_point = if (global.remote.enabled) global.remote.input.mouse_point.? else POINT { .x = 0, .y = 0 };
             renderStringMax300(hdc, 0, mouse_row + 1, "mouse {}x{} remote {}x{}", .{
-                global.local_mouse_point.x, global.local_mouse_point.y,
+                local_mouse_point.x, local_mouse_point.y,
                 remote_mouse_point.x, remote_mouse_point.y,
             });
             renderStringMax300(hdc, 1, mouse_row + 2, "forward: {}", .{global.mouse_msg_forward});
             renderStringMax300(hdc, 1, mouse_row + 3, "hc_action: {}", .{global.mouse_msg_hc_action});
             renderStringMax300(hdc, 1, mouse_row + 4, "hc_noremove: {}", .{global.mouse_msg_hc_noremove});
             renderStringMax300(hdc, 1, mouse_row + 5, "unknown: {}", .{global.mouse_msg_unknown});
-            renderStringMax300(hdc, 1, mouse_row + 6, "buttons: leftdown={} rightdown={}", .{
-                               global.mouse_left_button_down, global.mouse_right_button_down});
+            renderStringMax300(hdc, 1, mouse_row + 6, "buttons: left={s} right={} remote: left={s} right={}", .{
+                               fmtOptBool(global.local_input.mouse_left_down), global.mouse_right_button_down,
+                               fmtOptBool(global.remote.input.mouse_left_down), false});
             if (global.sock == INVALID_SOCKET) {
                 std.debug.assert(global.sock_connected == false);
                 renderStringMax300(hdc, 0, 8, "not connected", .{});
@@ -277,11 +290,14 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
                     global.remote.enabled = false;
                 } else {
                     global.remote.enabled = true;
+                    //
                     // TODO: initialize this correctly
-                    global.remote.mouse_point = .{
-                        .x = global.local_mouse_point.x,
-                        .y = global.local_mouse_point.y,
-                    };
+                    //
+                    if (global.local_input.mouse_point) |p| {
+                        global.remote.input.mouse_point = p;
+                    } else {
+                        global.remote.input.mouse_point = .{.x=0,.y=0};
+                    }
                 }
             }
             invalidateRect();
@@ -347,6 +363,11 @@ fn globalSockSendFull(buf: []const u8) void {
     };
 }
 
+fn sendMouseLeft(arg: u8) void {
+    if (global.sock_connected) {
+        //globalSockSendFull(&[_]u8 { proto.mouse_left, arg });
+    }
+}
 fn sendMouseMove(point: POINT) void {
     if (!global.sock_connected) {
         return;
@@ -376,6 +397,16 @@ fn sendMouseMove(point: POINT) void {
 }
 
 fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT {
+    if (!global.got_cursor_pos) {
+        var mouse_point : POINT = undefined;
+        if (0 == GetCursorPos(&mouse_point)) {
+            messageBoxF("GetCursorPos failed with {}", .{GetLastError()});
+            ExitProcess(1);
+        }
+        global.local_input.mouse_point = mouse_point;
+        global.got_cursor_pos = true;
+    }
+
     var do_invalidate: bool = false;
     if (code < 0) {
         global.mouse_msg_forward += 1;
@@ -386,23 +417,33 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
             const data = @intToPtr(*MOUSEHOOKSTRUCT, @bitCast(usize, lParam));
             //log("[DEBUG] mousemove %dx%d", data.pt.x, data.pt.y);
             if (global.remote.enabled) {
-                const diff_x = data.pt.x - global.local_mouse_point.x;
-                const diff_y = data.pt.y - global.local_mouse_point.y;
-                global.remote.mouse_point = POINT {
-                    .x = global.remote.mouse_point.x + diff_x,
-                    .y = global.remote.mouse_point.y + diff_y,
+                const diff_x = data.pt.x - global.local_input.mouse_point.?.x;
+                const diff_y = data.pt.y - global.local_input.mouse_point.?.y;
+                global.remote.input.mouse_point = POINT {
+                    .x = global.remote.input.mouse_point.?.x + diff_x,
+                    .y = global.remote.input.mouse_point.?.y + diff_y,
                 };
-                // TODO: check if next_remote_point != global.remote.r_mouse_point?
-                sendMouseMove(global.remote.mouse_point);
+                // TODO: check if point has changed before sending?
+                sendMouseMove(global.remote.input.mouse_point.?);
             } else {
-                global.local_mouse_point = data.pt;
+                global.local_input.mouse_point = data.pt;
             }
             do_invalidate = true;
         } else if (wParam == WM_LBUTTONDOWN) {
-            global.mouse_left_button_down = 1;
+            if (global.remote.enabled) {
+                global.remote.input.mouse_left_down = true;
+                sendMouseLeft(1);
+            } else {
+                global.local_input.mouse_left_down = true;
+            }
             do_invalidate = true;
         } else if (wParam == WM_LBUTTONUP) {
-            global.mouse_left_button_down = 0;
+            if (global.remote.enabled) {
+                global.remote.input.mouse_left_down = false;
+                sendMouseLeft(0);
+            } else {
+                global.local_input.mouse_left_down = false;
+            }
             do_invalidate = true;
         } else if (wParam == WM_RBUTTONDOWN) {
             global.mouse_right_button_down = 1;
