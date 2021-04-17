@@ -446,7 +446,7 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
         do_invalidate = true;
         if (wParam == WM_MOUSEMOVE) {
             const data = @intToPtr(*MOUSEHOOKSTRUCT, @bitCast(usize, lParam));
-            //log("[DEBUG] mousemove %dx%d", data.pt.x, data.pt.y);
+            //log("[DEBUG] mousemove {} x {}", .{data.pt.x, data.pt.y});
             if (global.remote.enabled) {
                 const diff_x = data.pt.x - global.local_input.mouse_point.?.x;
                 const diff_y = data.pt.y - global.local_input.mouse_point.?.y;
