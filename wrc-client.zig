@@ -53,9 +53,10 @@ const InputState = struct {
 };
 
 const global = struct {
+    var tick_frequency: f32 = undefined;
+    var tick_start: u64 = undefined;
     var logfile: std.fs.File = undefined;
     var config: Config = Config.default();
-    var tick_frequency: f32 = undefined;
     var hwnd: HWND = undefined;
 
     pub var got_cursor_pos = false;
@@ -97,6 +98,13 @@ pub export fn wWinMain(hInstance: HINSTANCE, removeme: HINSTANCE, pCmdLine: [*:0
     return 0;
 }
 fn main2(hInstance: HINSTANCE, nCmdShow: u32) error{AlreadyReported}!void {
+    global.tick_frequency = @intToFloat(f32, std.os.windows.QueryPerformanceFrequency());
+    if (common.wsaStartup()) |e| {
+      messageBoxF("WSAStartup failed: {}", .{e});
+      return error.AlreadyReported;
+    }
+    global.tick_start = std.os.windows.QueryPerformanceCounter();
+
     const log_filename = "wrc-client.log";
     global.logfile = std.fs.cwd().createFile(log_filename, .{}) catch |e| {
         messageBoxF("failed to open logfile '{s}': {}", .{log_filename, e});
@@ -131,12 +139,6 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) error{AlreadyReported}!void {
     }
     // code currently assumes this is true
     std.debug.assert(if (global.config.remote_host) |_| true else false);
-
-    global.tick_frequency = @intToFloat(f32, std.os.windows.QueryPerformanceFrequency());
-    if (common.wsaStartup()) |e| {
-      messageBoxF("WSAStartup failed: {}", .{e});
-      return error.AlreadyReported;
-    }
 
     // add global mouse hook
     {
@@ -212,7 +214,8 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) error{AlreadyReported}!void {
 }
 
 fn log(comptime fmt: []const u8, args: anytype) void {
-    global.logfile.writer().print(fmt ++ "\n", args) catch @panic("log failed");
+    const time = @intToFloat(f32, (std.os.windows.QueryPerformanceCounter() - global.tick_start)) / global.tick_frequency;
+    global.logfile.writer().print("{d:.5}: " ++ fmt ++ "\n", .{time} ++ args) catch @panic("log failed");
 }
 
 fn messageBoxF(comptime fmt: []const u8, args: anytype) void {
