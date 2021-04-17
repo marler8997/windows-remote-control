@@ -399,7 +399,7 @@ fn globalSockSendFull(buf: []const u8) void {
 
 fn sendMouseButton(button: u8, down: u8) void {
     if (global.sock_connected) {
-        globalSockSendFull(&[_]u8 { proto.mouse_button, button, down });
+        globalSockSendFull(&[_]u8 { @enumToInt(proto.Msg.mouse_button), button, down });
     }
 }
 fn sendMouseMove(point: POINT, allow_defer: bool) void {
@@ -437,7 +437,7 @@ fn sendMouseMove(point: POINT, allow_defer: bool) void {
 
     // NOTE: x and y can be out of range of the resolution
     var buf: [9]u8 = undefined;
-    buf[0] = proto.mouse_move;
+    buf[0] = @enumToInt(proto.Msg.mouse_move);
     std.mem.writeIntBig(i32, buf[1..5], point.x);
     std.mem.writeIntBig(i32, buf[5..9], point.y);
     //log("mouse move {} x {}", .{point.x, point.y});

@@ -56,40 +56,34 @@ const Client = struct {
     }
 };
 
-// returns: length of command on success
-//          0 if a partial command was received,
-//          null on error (logs errors)
-fn processCommand(client: *Client, cmd: []const u8) ?usize {
-    std.debug.assert(cmd.len > 0);
-    if (cmd[0] == proto.mouse_move) {
-        if (cmd.len < 9)
-            return 0; // need more data
-        const x = std.mem.readIntBig(i32, cmd[1..5]);
-        const y = std.mem.readIntBig(i32, cmd[5..9]);
+fn processMessage(client: *Client, msg: proto.Msg, data: []const u8) !void {
+    switch (msg) {
+    .mouse_move => {
+        std.debug.assert(data.len == 8);
+        const x = std.mem.readIntBig(i32, data[0..4]);
+        const y = std.mem.readIntBig(i32, data[4..8]);
         // TODO: need a way to disable this, possibly with a key press
         if (0 == SetCursorPos(x, y)) {
             std.log.err("SetCursorPos {} {} failed with {}", .{x, y, GetLastError()});
         }
         client.mouse_point = .{ .x = x, .y = y };
-        return 9;
-    }
-    if (cmd[0] == proto.mouse_button) {
-        if (cmd.len < 3)
-            return 0; // need more data
-        const button: enum {left,right} = switch (cmd[1]) {
+    },
+    .mouse_button => {
+        std.debug.assert(data.len == 2);
+        const button: enum {left,right} = switch (data[0]) {
             proto.mouse_button_left => .left,
             proto.mouse_button_right => .right,
             else => |val| {
                 std.log.err("unknown mouse button {}", .{val});
-                return null; // fail
+                return error.InvalidMessageData;
             },
         };
-        const down = switch (cmd[2]) {
+        const down = switch (data[1]) {
             0 => false,
             1 => true,
             else => |val| {
                 std.log.err("expected 0 or 1 for mouse_button down argument but got {}", .{val});
-                return null; // fail
+                return error.InvalidMessageData;
             },
         };
         if (client.mouse_point) |mouse_point| {
@@ -119,32 +113,26 @@ fn processCommand(client: *Client, cmd: []const u8) ?usize {
         } else {
             std.log.info("dropping mouse left down={}, no mouse position", .{down});
         }
-        return 3;
+    },
     }
-
-//  if (cmd[0] == 'a') {
-//    std.log.info("got 'a'");
-//    return 1;
-//  }
-//  if (cmd[0] == '\n') {
-//    std.log.info("got newline");
-//    return 1;
-//  }
-
-    std.log.err("unknown comand {}", .{cmd[0]});
-    return null; // fail
 }
 
 fn processClientData(client: *Client, data: []const u8) ?usize {
     std.debug.assert(data.len > 0);
     var offset: usize = 0;
     while (true) {
-        const result = processCommand(client, data[offset..]) orelse {
+        const msg_info = proto.getMsgInfo(data[offset]) orelse {
+            std.log.err("unknown message id {}", .{data[offset]});
             return null; // fail
         };
-        if (result == 0)
+        const msg_data_offset = offset + 1;
+        if (msg_data_offset + @intCast(usize, msg_info.data_len) > data.len) {
             return offset;
-        offset += result;
+        }
+        processMessage(client, msg_info.id, data[msg_data_offset..msg_data_offset + msg_info.data_len]) catch {
+            return null; // fail, error already logged
+        };
+        offset = msg_data_offset + msg_info.data_len;
         if (offset == data.len)
             return data.len;
         std.debug.assert(offset < data.len);
