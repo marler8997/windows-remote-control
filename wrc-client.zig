@@ -123,24 +123,8 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) error{AlreadyReported}!void {
     };
     log("started", .{});
 
-    // get screen resolution
-    {
-        std.debug.assert(0 == GetSystemMetrics(SM_XVIRTUALSCREEN));
-        std.debug.assert(0 == GetSystemMetrics(SM_YVIRTUALSCREEN));
-        global.screen_size = .{
-            .x = GetSystemMetrics(SM_CXVIRTUALSCREEN),
-            .y = GetSystemMetrics(SM_CYVIRTUALSCREEN),
-        };
-        if (global.screen_size.x == 0) {
-            messageBoxF("failed to get screen width with {}", .{GetLastError()});
-            return error.AlreadyReported;
-        }
-        if (global.screen_size.y == 0) {
-            messageBoxF("failed to get screen height with {}", .{GetLastError()});
-            return error.AlreadyReported;
-        }
-        log("screen size {} x {}", .{global.screen_size.x, global.screen_size.y});
-    }
+    global.screen_size = common.getScreenSize();
+    log("screen size {} x {}", .{global.screen_size.x, global.screen_size.y});
 
     var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = &arena_allocator.allocator;
@@ -402,20 +386,10 @@ fn enableRemoteControl(point: POINT) void {
 const WINDOW_CLASS = _T("WindowsRemoteControlClient");
 
 
-fn sendFull(s: SOCKET, buf: []const u8) !void {
-    var total: usize = 0;
-    while (total < buf.len) {
-        // NOTE: the data type for send is not correct
-        const sent = send(s, @ptrCast(*const i8, buf.ptr + total), @intCast(i32, buf.len - total), @intToEnum(send_flags, 0));
-        if (sent <= 0)
-            return error.SocketSendFailed;
-        total += @intCast(usize, sent);
-    }
-}
 fn globalSockSendFull(buf: []const u8) void {
     std.debug.assert(global.sock != INVALID_SOCKET);
     std.debug.assert(global.sock_connected);
-    sendFull(global.sock, buf) catch {
+    common.sendFull(global.sock, buf) catch {
         global.sock_connected = false;
         _ = shutdown(global.sock, SD_BOTH);
         if (closesocket(global.sock) != 0) unreachable;
@@ -426,7 +400,7 @@ fn globalSockSendFull(buf: []const u8) void {
 
 fn sendMouseButton(button: u8, down: u8) void {
     if (global.sock_connected) {
-        globalSockSendFull(&[_]u8 { @enumToInt(proto.Msg.mouse_button), button, down });
+        globalSockSendFull(&[_]u8 { @enumToInt(proto.ClientToServerMsg.mouse_button), button, down });
     }
 }
 fn sendMouseMove(point: POINT, allow_defer: bool) void {
@@ -464,7 +438,7 @@ fn sendMouseMove(point: POINT, allow_defer: bool) void {
 
     // NOTE: x and y can be out of range of the resolution
     var buf: [9]u8 = undefined;
-    buf[0] = @enumToInt(proto.Msg.mouse_move);
+    buf[0] = @enumToInt(proto.ClientToServerMsg.mouse_move);
     std.mem.writeIntBig(i32, buf[1..5], point.x);
     std.mem.writeIntBig(i32, buf[5..9], point.y);
     //log("mouse move {} x {}", .{point.x, point.y});

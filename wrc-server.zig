@@ -34,6 +34,10 @@ const INPUT = extern struct {
     },
 };
 
+const global = struct {
+    pub var screen_size: POINT = undefined;
+};
+
 const Client = struct {
     sock: SOCKET,
     leftover: [proto.max_msg_data_len-1]u8,
@@ -56,7 +60,7 @@ const Client = struct {
     }
 };
 
-fn processMessage(client: *Client, msg: proto.Msg, data: []const u8) !void {
+fn processMessage(client: *Client, msg: proto.ClientToServerMsg, data: []const u8) !void {
     switch (msg) {
     .mouse_move => {
         std.debug.assert(data.len == 8);
@@ -121,7 +125,7 @@ fn processClientData(client: *Client, data: []const u8) ?usize {
     std.debug.assert(data.len > 0);
     var offset: usize = 0;
     while (true) {
-        const msg_info = proto.getMsgInfo(data[offset]) orelse {
+        const msg_info = proto.getClientToServerMsgInfo(data[offset]) orelse {
             std.log.err("unknown message id {}", .{data[offset]});
             return null; // fail
         };
@@ -177,13 +181,6 @@ fn handleClientSock(client: *Client) void {
     @memcpy(&client.leftover, buffer.ptr + processed, client.leftover_len);
 }
 
-fn memcpyUpward(dest: [*]u8, src: [*]const u8, len: usize) void {
-    var i: usize = 0;
-    while (i < len) : (i += 1) {
-        dest[i] = src[i];
-    }
-}
-
 fn handleListenSock(listen_sock: SOCKET, client: *Client) !void
 {
     var from: std.net.Address = undefined;
@@ -195,6 +192,15 @@ fn handleListenSock(listen_sock: SOCKET, client: *Client) !void
     }
     std.log.info("accepted connection from {}", .{from});
     if (client.sock == INVALID_SOCKET) {
+        var msg: [9]u8 = undefined;
+        msg[0] = @enumToInt(proto.ServerToClientMsg.screen_size);
+        std.mem.writeIntBig(i32, msg[1..5], global.screen_size.x);
+        std.mem.writeIntBig(i32, msg[5..9], global.screen_size.y);
+        common.sendFull(new_sock, &msg) catch {
+            std.log.err("failed to send screen size to client, error={}", .{GetLastError()});
+            _ = shutdown(new_sock, SD_BOTH);
+            if (closesocket(new_sock) != 0) unreachable;
+        };
         // TODO: set socket to nonblocking??
         client.setSock(new_sock);
     } else {
@@ -257,6 +263,8 @@ pub fn main() !u8 {
 }
 
 fn main2() !void {
+    global.screen_size = common.getScreenSize();
+
     if (common.wsaStartup()) |e| {
         std.log.err("WSAStartup failed with {}", .{GetLastError()});
         return error.AlreadyReported;

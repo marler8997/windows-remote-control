@@ -1,4 +1,4 @@
-pub const Msg = enum(u8) {
+pub const ClientToServerMsg = enum(u8) {
     mouse_move = 1,
     mouse_button = 2,
 };
@@ -11,11 +11,15 @@ pub const mouse_button_right = 0x01;
 
 pub const max_msg_data_len = 8;
 
-const MsgInfo = struct { id: Msg, data_len: u4 };
-pub fn getMsgInfo(first_byte: u8) ?MsgInfo {
+const ClientToServerMsgInfo = struct { id: ClientToServerMsg, data_len: u4 };
+pub fn getClientToServerMsgInfo(first_byte: u8) ?ClientToServerMsgInfo {
     return switch (first_byte) {
-        @enumToInt(Msg.mouse_move) => .{ .id = .mouse_move, .data_len = mouse_move_msg_data_len },
-        @enumToInt(Msg.mouse_button) => .{ .id = .mouse_button, .data_len = mouse_button_msg_data_len },
+        @enumToInt(ClientToServerMsg.mouse_move) => .{ .id = .mouse_move, .data_len = mouse_move_msg_data_len },
+        @enumToInt(ClientToServerMsg.mouse_button) => .{ .id = .mouse_button, .data_len = mouse_button_msg_data_len },
         else => return null,
     };
 }
+
+pub const ServerToClientMsg = enum(u8) {
+    screen_size = 1,
+};
