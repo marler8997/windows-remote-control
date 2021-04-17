@@ -58,6 +58,7 @@ const global = struct {
     var logfile: std.fs.File = undefined;
     var config: Config = Config.default();
     var hwnd: HWND = undefined;
+    var window_msg_counter: u8 = 0;
 
     pub const remote = struct {
         pub var enabled: bool = false;
@@ -81,7 +82,7 @@ const global = struct {
     pub var sock_connected: bool = false;
 
     pub var last_send_mouse_move_tick: u64 = 0;
-    pub var deferred_mouse_move_msg_posted = false;
+    pub var deferred_mouse_move_msg: ?@TypeOf(window_msg_counter) = null;
     pub var deferred_mouse_move: ?POINT = null;
 };
 
@@ -267,6 +268,8 @@ fn fmtOptBool(opt_bool: ?bool) []const u8 {
 }
 
 fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT {
+    global.window_msg_counter +%= 1;
+
     switch (message) {
         WM_PAINT => {
             var ps: PAINTSTRUCT = undefined;
@@ -302,11 +305,16 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
             return 0;
         },
         WM_USER_DEFERRED_MOUSE_MOVE => {
-            std.debug.assert(global.deferred_mouse_move_msg_posted);
-            global.deferred_mouse_move_msg_posted = false;
+            const msg_counter = global.deferred_mouse_move_msg orelse @panic("codebug");
+            global.deferred_mouse_move_msg = null;
             if (global.deferred_mouse_move) |point| {
+                // prevent polling by stopping the defer message sequence if
+                // there was no messages processed between now and when the message
+                // was deferred.  I should explore using a windows timer message
+                // to delay the message.
+                const allow_defer = (msg_counter +% 1 != global.window_msg_counter);
                 // sendMouseMove will set deferred_mouse_move to null
-                sendMouseMove(point);
+                sendMouseMove(point, allow_defer);
             }
             return 0;
         },
@@ -394,7 +402,7 @@ fn sendMouseButton(button: u8, down: u8) void {
         globalSockSendFull(&[_]u8 { proto.mouse_button, button, down });
     }
 }
-fn sendMouseMove(point: POINT) void {
+fn sendMouseMove(point: POINT, allow_defer: bool) void {
     global.deferred_mouse_move = null; // invalidate any deferred mouse moves
     if (!global.sock_connected) {
         return;
@@ -405,7 +413,7 @@ fn sendMouseMove(point: POINT) void {
     // TODO: can we inspect the windows message queue for any more mouse events before sending this one?
     //
     const limit_mouse_move_bandwidth = true;
-    if (limit_mouse_move_bandwidth) {
+    if (limit_mouse_move_bandwidth and allow_defer) {
         const now = std.os.windows.QueryPerformanceCounter();
         const diff_ticks = now - global.last_send_mouse_move_tick;
         const diff_sec = @intToFloat(f32, diff_ticks) / global.tick_frequency;
@@ -413,12 +421,12 @@ fn sendMouseMove(point: POINT) void {
         // with latency by not flooding the network
         if (diff_sec < 0.005) {
             //log("mouse move diff %f seconds (%lld ticks) DROPPING!", diff_sec, diff_ticks);
-            if (!global.deferred_mouse_move_msg_posted) {
+            if (global.deferred_mouse_move_msg == null) {
                 if (0 == PostMessage(global.hwnd, WM_USER_DEFERRED_MOUSE_MOVE, 0, 0)) {
                     messageBoxF("PostMessage for WM_USER_DEFERRED_MOUSE_MOVE failed with {}", .{GetLastError()});
                     ExitProcess(1);
                 }
-                global.deferred_mouse_move_msg_posted = true;
+                global.deferred_mouse_move_msg = global.window_msg_counter;
             }
             global.deferred_mouse_move = point;
             return;
@@ -464,7 +472,7 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
                 };
                 if (moved) {
                     global.remote.input.mouse_point = next_remote_mouse_point;
-                    sendMouseMove(global.remote.input.mouse_point.?);
+                    sendMouseMove(global.remote.input.mouse_point.?, true);
                 }
             } else {
                 global.local_input.mouse_point = data.pt;
