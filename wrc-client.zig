@@ -423,6 +423,7 @@ fn sendMouseMove(point: POINT) void {
     buf[0] = proto.mouse_move;
     std.mem.writeIntBig(i32, buf[1..5], point.x);
     std.mem.writeIntBig(i32, buf[5..9], point.y);
+    //log("mouse move {} x {}", .{point.x, point.y});
     globalSockSendFull(&buf);
 }
 
@@ -449,12 +450,22 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
             if (global.remote.enabled) {
                 const diff_x = data.pt.x - global.local_input.mouse_point.?.x;
                 const diff_y = data.pt.y - global.local_input.mouse_point.?.y;
-                global.remote.input.mouse_point = POINT {
+                const next_remote_mouse_point = POINT {
                     .x = global.remote.input.mouse_point.?.x + diff_x,
                     .y = global.remote.input.mouse_point.?.y + diff_y,
                 };
-                // TODO: check if point has changed before sending?
-                sendMouseMove(global.remote.input.mouse_point.?);
+                const moved = blk: {
+                    if (global.remote.input.mouse_point) |p| {
+                        if (next_remote_mouse_point.x == p.x and next_remote_mouse_point.y == p.y) {
+                            break :blk false;
+                        }
+                    }
+                    break :blk true;
+                };
+                if (moved) {
+                    global.remote.input.mouse_point = next_remote_mouse_point;
+                    sendMouseMove(global.remote.input.mouse_point.?);
+                }
             } else {
                 global.local_input.mouse_point = data.pt;
             }

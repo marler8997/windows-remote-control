@@ -18,3 +18,4 @@ Multi-Byte values are stored in big endian.
 * mouse "portal"
 * debug initial input latency
 * fix window flickering
+* have server run in Admin mode to allow it to work when admin processes take the foreground
