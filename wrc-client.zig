@@ -59,6 +59,7 @@ const global = struct {
     var config: Config = Config.default();
     var hwnd: HWND = undefined;
     var window_msg_counter: u8 = 0;
+    var screen_size: POINT = undefined;
 
     pub const remote = struct {
         pub var enabled: bool = false;
@@ -121,6 +122,25 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) error{AlreadyReported}!void {
         return error.AlreadyReported;
     };
     log("started", .{});
+
+    // get screen resolution
+    {
+        std.debug.assert(0 == GetSystemMetrics(SM_XVIRTUALSCREEN));
+        std.debug.assert(0 == GetSystemMetrics(SM_YVIRTUALSCREEN));
+        global.screen_size = .{
+            .x = GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            .y = GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        };
+        if (global.screen_size.x == 0) {
+            messageBoxF("failed to get screen width with {}", .{GetLastError()});
+            return error.AlreadyReported;
+        }
+        if (global.screen_size.y == 0) {
+            messageBoxF("failed to get screen height with {}", .{GetLastError()});
+            return error.AlreadyReported;
+        }
+        log("screen size {} x {}", .{global.screen_size.x, global.screen_size.y});
+    }
 
     var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = &arena_allocator.allocator;
@@ -283,7 +303,8 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
             renderStringMax300(hdc, 0, mouse_row + 0, "REMOTE: {}", .{global.remote.enabled});
             const local_mouse_point = getCursorPos();
             const remote_mouse_point = if (global.remote.enabled) global.remote.input.mouse_point.? else POINT { .x = 0, .y = 0 };
-            renderStringMax300(hdc, 0, mouse_row + 1, "mouse {}x{} remote {}x{}", .{
+            renderStringMax300(hdc, 0, mouse_row + 1, "screen {}x{} mouse {}x{} remote {}x{}", .{
+                global.screen_size.x, global.screen_size.y,
                 local_mouse_point.x, local_mouse_point.y,
                 remote_mouse_point.x, remote_mouse_point.y,
             });
