@@ -487,8 +487,7 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
         do_invalidate = true;
     }
     if (do_invalidate) {
-        // TODO: check for error?
-        _ = InvalidateRect(global.hwnd, null, TRUE);
+        invalidateRect();
     }
     if (global.remote.enabled) {
         return 1;
