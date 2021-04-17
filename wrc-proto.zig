@@ -9,6 +9,8 @@ pub const mouse_button_msg_data_len = 2;
 pub const mouse_button_left = 0x00;
 pub const mouse_button_right = 0x01;
 
+pub const max_msg_data_len = 8;
+
 const MsgInfo = struct { id: Msg, data_len: u4 };
 pub fn getMsgInfo(first_byte: u8) ?MsgInfo {
     return switch (first_byte) {

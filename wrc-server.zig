@@ -36,22 +36,22 @@ const INPUT = extern struct {
 
 const Client = struct {
     sock: SOCKET,
-    buffer: [100]u8,
-    data_len: usize,
+    leftover: [proto.max_msg_data_len-1]u8,
+    leftover_len: usize,
     mouse_point: ?POINT,
 
     pub fn initInvalid() Client {
         return .{
             .sock = INVALID_SOCKET,
-            .buffer = undefined,
-            .data_len = undefined,
+            .leftover = undefined,
+            .leftover_len = undefined,
             .mouse_point = undefined,
         };
     }
 
     pub fn setSock(self: *Client, sock: SOCKET) void {
         self.sock = sock;
-        self.data_len = 0;
+        self.leftover_len = 0;
         self.mouse_point = null;
     }
 };
@@ -140,9 +140,15 @@ fn processClientData(client: *Client, data: []const u8) ?usize {
 }
 
 fn handleClientSock(client: *Client) void {
-    const buffer: []u8 = &client.buffer;
+    var buffer_storage: [1024]u8 = undefined;
+    const buffer: []u8 = &buffer_storage;
+
+    @memcpy(buffer.ptr, &client.leftover, client.leftover_len);
+    const recv_buf = buffer.ptr + client.leftover_len;
+    const recv_buf_len = buffer.len - client.leftover_len;
+
     // TODO: the data type for recv is not correct
-    const len = recv(client.sock, @ptrCast(*i8, buffer.ptr + client.data_len), @intCast(i32, buffer.len - client.data_len), 0);
+    const len = recv(client.sock, @ptrCast(*i8, recv_buf), @intCast(i32, recv_buf_len), 0);
     if (len <= 0) {
         if (len == 0) {
           std.log.info("client closed connection", .{});
@@ -158,17 +164,17 @@ fn handleClientSock(client: *Client) void {
         client.sock = INVALID_SOCKET;
         return;
     }
-    //std.log.info("[DEBUG] got %d bytes", len);
-    const total = client.data_len + @intCast(usize, len);
+    //std.log.info("[DEBUG] got {} bytes", .{len});
+    const total = client.leftover_len + @intCast(usize, len);
     const processed = processClientData(client, buffer[0..total]) orelse {
         // error already logged
         if (closesocket(client.sock) != 0) unreachable;
         client.sock = INVALID_SOCKET;
         return;
     };
-    const leftover = total - processed;
-    memcpyUpward(buffer.ptr, buffer.ptr + processed, leftover);
-    client.data_len = leftover;
+    client.leftover_len = total - processed;
+    std.debug.assert(client.leftover_len < proto.max_msg_data_len);
+    @memcpy(&client.leftover, buffer.ptr + processed, client.leftover_len);
 }
 
 fn memcpyUpward(dest: [*]u8, src: [*]const u8, len: usize) void {
