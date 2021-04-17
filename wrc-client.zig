@@ -59,7 +59,6 @@ const global = struct {
     var config: Config = Config.default();
     var hwnd: HWND = undefined;
 
-    pub var got_cursor_pos = false;
     pub const remote = struct {
         pub var enabled: bool = false;
         pub var input: InputState = .{
@@ -86,6 +85,16 @@ const global = struct {
     pub var deferred_mouse_move: ?POINT = null;
 };
 
+fn getCursorPos() POINT {
+    if (global.local_input.mouse_point) |p| return p;
+    var mouse_point : POINT = undefined;
+    if (0 == GetCursorPos(&mouse_point)) {
+        messageBoxF("GetCursorPos failed with {}", .{GetLastError()});
+        ExitProcess(1);
+    }
+    global.local_input.mouse_point = mouse_point;
+    return mouse_point;
+}
 
 pub export fn wWinMain(hInstance: HINSTANCE, removeme: HINSTANCE, pCmdLine: [*:0]u16, nCmdShow: c_int) callconv(WINAPI) c_int {
     main2(hInstance, @intCast(u32, nCmdShow)) catch |e| switch (e) {
@@ -269,7 +278,7 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
 
             var mouse_row: i32 = 0;
             renderStringMax300(hdc, 0, mouse_row + 0, "REMOTE: {}", .{global.remote.enabled});
-            const local_mouse_point = if (global.local_input.mouse_point) |p| p else POINT { .x=0, .y=0 };
+            const local_mouse_point = getCursorPos();
             const remote_mouse_point = if (global.remote.enabled) global.remote.input.mouse_point.? else POINT { .x = 0, .y = 0 };
             renderStringMax300(hdc, 0, mouse_row + 1, "mouse {}x{} remote {}x{}", .{
                 local_mouse_point.x, local_mouse_point.y,
@@ -428,16 +437,6 @@ fn sendMouseMove(point: POINT) void {
 }
 
 fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT {
-    if (!global.got_cursor_pos) {
-        var mouse_point : POINT = undefined;
-        if (0 == GetCursorPos(&mouse_point)) {
-            messageBoxF("GetCursorPos failed with {}", .{GetLastError()});
-            ExitProcess(1);
-        }
-        global.local_input.mouse_point = mouse_point;
-        global.got_cursor_pos = true;
-    }
-
     var do_invalidate: bool = false;
     if (code < 0) {
         global.mouse_msg_forward += 1;
@@ -448,8 +447,9 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
             const data = @intToPtr(*MOUSEHOOKSTRUCT, @bitCast(usize, lParam));
             //log("[DEBUG] mousemove {} x {}", .{data.pt.x, data.pt.y});
             if (global.remote.enabled) {
-                const diff_x = data.pt.x - global.local_input.mouse_point.?.x;
-                const diff_y = data.pt.y - global.local_input.mouse_point.?.y;
+                const local_mouse_point = getCursorPos();
+                const diff_x = data.pt.x - local_mouse_point.x;
+                const diff_y = data.pt.y - local_mouse_point.y;
                 const next_remote_mouse_point = POINT {
                     .x = global.remote.input.mouse_point.?.x + diff_x,
                     .y = global.remote.input.mouse_point.?.y + diff_y,
