@@ -419,7 +419,7 @@ fn sendMouseMove(point: POINT, allow_defer: bool) void {
         const diff_sec = @intToFloat(f32, diff_ticks) / global.tick_frequency;
         // drop the mouse move if it is too soon for now, this could help
         // with latency by not flooding the network
-        if (diff_sec < 0.005) {
+        if (diff_sec < 0.002) {
             //log("mouse move diff %f seconds (%lld ticks) DROPPING!", diff_sec, diff_ticks);
             if (global.deferred_mouse_move_msg == null) {
                 if (0 == PostMessage(global.hwnd, WM_USER_DEFERRED_MOUSE_MOVE, 0, 0)) {
