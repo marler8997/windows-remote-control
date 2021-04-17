@@ -49,6 +49,7 @@ const Config = struct {
 const InputState = struct {
     mouse_point: ?POINT,
     mouse_left_down: ?bool,
+    mouse_right_down: ?bool,
 };
 
 const global = struct {
@@ -63,6 +64,7 @@ const global = struct {
         pub var input: InputState = .{
             .mouse_point = null,
             .mouse_left_down = null,
+            .mouse_right_down = null,
         };
     };
     pub var mouse_msg_forward: u32 = 0;
@@ -72,8 +74,8 @@ const global = struct {
     pub var local_input = InputState {
         .mouse_point = null,
         .mouse_left_down = null,
+        .mouse_right_down = null,
     };
-    pub var mouse_right_button_down: u8 = 0;
 
     pub var sock: SOCKET = INVALID_SOCKET;
     pub var sock_connected: bool = false;
@@ -274,9 +276,9 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
             renderStringMax300(hdc, 1, mouse_row + 3, "hc_action: {}", .{global.mouse_msg_hc_action});
             renderStringMax300(hdc, 1, mouse_row + 4, "hc_noremove: {}", .{global.mouse_msg_hc_noremove});
             renderStringMax300(hdc, 1, mouse_row + 5, "unknown: {}", .{global.mouse_msg_unknown});
-            renderStringMax300(hdc, 1, mouse_row + 6, "buttons: left={s} right={} remote: left={s} right={}", .{
-                               fmtOptBool(global.local_input.mouse_left_down), global.mouse_right_button_down,
-                               fmtOptBool(global.remote.input.mouse_left_down), false});
+            renderStringMax300(hdc, 1, mouse_row + 6, "buttons: left={s} right={s} remote: left={s} right={s}", .{
+                               fmtOptBool(global.local_input.mouse_left_down), fmtOptBool(global.local_input.mouse_right_down),
+                               fmtOptBool(global.remote.input.mouse_left_down), fmtOptBool(global.remote.input.mouse_right_down)});
             if (global.sock == INVALID_SOCKET) {
                 std.debug.assert(global.sock_connected == false);
                 renderStringMax300(hdc, 0, 8, "not connected", .{});
@@ -375,9 +377,9 @@ fn globalSockSendFull(buf: []const u8) void {
     };
 }
 
-fn sendMouseLeft(arg: u8) void {
+fn sendMouseButton(button: u8, down: u8) void {
     if (global.sock_connected) {
-        globalSockSendFull(&[_]u8 { proto.mouse_left, arg });
+        globalSockSendFull(&[_]u8 { proto.mouse_button, button, down });
     }
 }
 fn sendMouseMove(point: POINT) void {
@@ -453,29 +455,34 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
             } else {
                 global.local_input.mouse_point = data.pt;
             }
-            do_invalidate = true;
         } else if (wParam == WM_LBUTTONDOWN) {
             if (global.remote.enabled) {
                 global.remote.input.mouse_left_down = true;
-                sendMouseLeft(1);
+                sendMouseButton(proto.mouse_button_left, 1);
             } else {
                 global.local_input.mouse_left_down = true;
             }
-            do_invalidate = true;
         } else if (wParam == WM_LBUTTONUP) {
             if (global.remote.enabled) {
                 global.remote.input.mouse_left_down = false;
-                sendMouseLeft(0);
+                sendMouseButton(proto.mouse_button_left, 0);
             } else {
                 global.local_input.mouse_left_down = false;
             }
-            do_invalidate = true;
         } else if (wParam == WM_RBUTTONDOWN) {
-            global.mouse_right_button_down = 1;
-            do_invalidate = true;
+            if (global.remote.enabled) {
+                global.remote.input.mouse_right_down = true;
+                sendMouseButton(proto.mouse_button_right, 1);
+            } else {
+                global.local_input.mouse_right_down = true;
+            }
         } else if (wParam == WM_RBUTTONUP) {
-            global.mouse_right_button_down = 0;
-            do_invalidate = true;
+            if (global.remote.enabled) {
+                global.remote.input.mouse_right_down = false;
+                sendMouseButton(proto.mouse_button_right, 0);
+            } else {
+                global.local_input.mouse_right_down = false;
+            }
         } else {
             log("mouseProc: HC_ACTION unknown windows message {}", .{wParam});
         }

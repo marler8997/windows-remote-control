@@ -73,21 +73,32 @@ fn processCommand(client: *Client, cmd: []const u8) ?usize {
         client.mouse_point = .{ .x = x, .y = y };
         return 9;
     }
-    if (cmd[0] == proto.mouse_left) {
-        if (cmd.len < 2)
+    if (cmd[0] == proto.mouse_button) {
+        if (cmd.len < 3)
             return 0; // need more data
-        const down = switch (cmd[1]) {
+        const button: enum {left,right} = switch (cmd[1]) {
+            proto.mouse_button_left => .left,
+            proto.mouse_button_right => .right,
+            else => |val| {
+                std.log.err("unknown mouse button {}", .{val});
+                return null; // fail
+            },
+        };
+        const down = switch (cmd[2]) {
             0 => false,
             1 => true,
             else => |val| {
-                std.log.err("expected 0 or 1 for mouse_left command argument but got {}", .{val});
+                std.log.err("expected 0 or 1 for mouse_button down argument but got {}", .{val});
                 return null; // fail
             },
         };
         if (client.mouse_point) |mouse_point| {
-            const flag =
-                if (down) win_input.MOUSEEVENTF_LEFTDOWN
-                else      win_input.MOUSEEVENTF_LEFTUP;
+            const flag = switch (button) {
+                .left  => if (down) win_input.MOUSEEVENTF_LEFTDOWN
+                          else      win_input.MOUSEEVENTF_LEFTUP,
+                .right => if (down) win_input.MOUSEEVENTF_RIGHTDOWN
+                          else      win_input.MOUSEEVENTF_RIGHTUP,
+            };
             // TODO: this should be const but SendInput arg types is not correct
             var input = INPUT {
                 .type = .MOUSE,
@@ -108,7 +119,7 @@ fn processCommand(client: *Client, cmd: []const u8) ?usize {
         } else {
             std.log.info("dropping mouse left down={}, no mouse position", .{down});
         }
-        return 2;
+        return 3;
     }
 
 //  if (cmd[0] == 'a') {
