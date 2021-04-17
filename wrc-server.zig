@@ -10,6 +10,7 @@ usingnamespace win32.api.debug;
 usingnamespace win32.api.system_services;
 usingnamespace win32.api.windows_and_messaging;
 usingnamespace win32.api.win_sock;
+usingnamespace win32.api.display_devices;
 
 const proto = @import("wrc-proto.zig");
 const common = @import("common.zig");
@@ -17,30 +18,48 @@ const common = @import("common.zig");
 // Stuff that is missing from the zigwin32 bindings
 const SOCKET = usize;
 const INVALID_SOCKET = ~@as(usize, 0);
+// NOTE: INPUT does not generate correctly yet because unions are implemented in zigwin32 yet
+const win_input = win32.api.keyboard_and_mouse_input;
+const INPUT = extern struct {
+    type: win_input.INPUT_typeFlags,
+    data: extern union {
+        mi: extern struct {
+            dw: i32,
+            dy: i32,
+            mouseData: u32,
+            dwFlags: u32,
+            time: u32,
+            dwExtraInfo: usize,
+        },
+    },
+};
 
 const Client = struct {
     sock: SOCKET,
     buffer: [100]u8,
     data_len: usize,
+    mouse_point: ?POINT,
 
     pub fn initInvalid() Client {
         return .{
             .sock = INVALID_SOCKET,
             .buffer = undefined,
             .data_len = undefined,
+            .mouse_point = undefined,
         };
     }
 
     pub fn setSock(self: *Client, sock: SOCKET) void {
         self.sock = sock;
         self.data_len = 0;
+        self.mouse_point = null;
     }
 };
 
 // returns: length of command on success
 //          0 if a partial command was received,
 //          null on error (logs errors)
-fn processCommand(cmd: []const u8) ?usize {
+fn processCommand(client: *Client, cmd: []const u8) ?usize {
     std.debug.assert(cmd.len > 0);
     if (cmd[0] == proto.mouse_move) {
         if (cmd.len < 9)
@@ -51,8 +70,46 @@ fn processCommand(cmd: []const u8) ?usize {
         if (0 == SetCursorPos(x, y)) {
             std.log.err("SetCursorPos {} {} failed with {}", .{x, y, GetLastError()});
         }
+        client.mouse_point = .{ .x = x, .y = y };
         return 9;
-  }
+    }
+    if (cmd[0] == proto.mouse_left) {
+        if (cmd.len < 2)
+            return 0; // need more data
+        const down = switch (cmd[1]) {
+            0 => false,
+            1 => true,
+            else => |val| {
+                std.log.err("expected 0 or 1 for mouse_left command argument but got {}", .{val});
+                return null; // fail
+            },
+        };
+        if (client.mouse_point) |mouse_point| {
+            const flag =
+                if (down) win_input.MOUSEEVENTF_LEFTDOWN
+                else      win_input.MOUSEEVENTF_LEFTUP;
+            // TODO: this should be const but SendInput arg types is not correct
+            var input = INPUT {
+                .type = .MOUSE,
+                .data = .{ .mi = .{
+                    .dw = mouse_point.x,
+                    .dy = mouse_point.y,
+                    .dwFlags =
+                        @enumToInt(flag) |
+                        @enumToInt(win_input.MOUSEEVENTF_ABSOLUTE),
+                    .mouseData = 0,
+                    .time = 0,
+                    .dwExtraInfo = 0,
+                } },
+            };
+            if (1 != win_input.SendInput(1, @ptrCast([*]win_input.INPUT, &input), @sizeOf(INPUT))) {
+                std.log.err("SendInput failed with {}", .{GetLastError()});
+            }
+        } else {
+            std.log.info("dropping mouse left down={}, no mouse position", .{down});
+        }
+        return 2;
+    }
 
 //  if (cmd[0] == 'a') {
 //    std.log.info("got 'a'");
@@ -67,11 +124,11 @@ fn processCommand(cmd: []const u8) ?usize {
     return null; // fail
 }
 
-fn processClientData(data: []const u8) ?usize {
+fn processClientData(client: *Client, data: []const u8) ?usize {
     std.debug.assert(data.len > 0);
     var offset: usize = 0;
     while (true) {
-        const result = processCommand(data[offset..]) orelse {
+        const result = processCommand(client, data[offset..]) orelse {
             return null; // fail
         };
         if (result == 0)
@@ -104,7 +161,7 @@ fn handleClientSock(client: *Client) void {
     }
     //std.log.info("[DEBUG] got %d bytes", len);
     const total = client.data_len + @intCast(usize, len);
-    const processed = processClientData(buffer[0..total]) orelse {
+    const processed = processClientData(client, buffer[0..total]) orelse {
         // error already logged
         if (closesocket(client.sock) != 0) unreachable;
         client.sock = INVALID_SOCKET;
