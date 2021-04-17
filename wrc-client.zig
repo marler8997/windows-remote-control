@@ -29,6 +29,7 @@ const WSAGETSELECTEVENT = LOWORD;
 const WSAGETSELECTERROR = HIWORD;
 
 const WM_USER_SOCKET = WM_USER + 1;
+const WM_USER_DEFERRED_MOUSE_MOVE = WM_USER + 2;
 
 const Direction = enum { left, top, right, bottom };
 const Config = struct {
@@ -78,6 +79,8 @@ const global = struct {
     pub var sock_connected: bool = false;
 
     pub var last_send_mouse_move_tick: u64 = 0;
+    pub var deferred_mouse_move_msg_posted = false;
+    pub var deferred_mouse_move: ?POINT = null;
 };
 
 
@@ -284,6 +287,15 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
             }
             return 0;
         },
+        WM_USER_DEFERRED_MOUSE_MOVE => {
+            std.debug.assert(global.deferred_mouse_move_msg_posted);
+            global.deferred_mouse_move_msg_posted = false;
+            if (global.deferred_mouse_move) |point| {
+                // sendMouseMove will set deferred_mouse_move to null
+                sendMouseMove(point);
+            }
+            return 0;
+        },
         WM_KEYDOWN => {
             if (wParam == VK_ESCAPE) {
                 if (global.remote.enabled) {
@@ -369,10 +381,15 @@ fn sendMouseLeft(arg: u8) void {
     }
 }
 fn sendMouseMove(point: POINT) void {
+    global.deferred_mouse_move = null; // invalidate any deferred mouse moves
     if (!global.sock_connected) {
         return;
     }
     std.debug.assert(global.sock != INVALID_SOCKET);
+
+    //
+    // TODO: can we inspect the windows message queue for any more mouse events before sending this one?
+    //
     const limit_mouse_move_bandwidth = true;
     if (limit_mouse_move_bandwidth) {
         const now = std.os.windows.QueryPerformanceCounter();
@@ -382,6 +399,14 @@ fn sendMouseMove(point: POINT) void {
         // with latency by not flooding the network
         if (diff_sec < 0.005) {
             //log("mouse move diff %f seconds (%lld ticks) DROPPING!", diff_sec, diff_ticks);
+            if (!global.deferred_mouse_move_msg_posted) {
+                if (0 == PostMessage(global.hwnd, WM_USER_DEFERRED_MOUSE_MOVE, 0, 0)) {
+                    messageBoxF("PostMessage for WM_USER_DEFERRED_MOUSE_MOVE failed with {}", .{GetLastError()});
+                    ExitProcess(1);
+                }
+                global.deferred_mouse_move_msg_posted = true;
+            }
+            global.deferred_mouse_move = point;
             return;
         }
         //log("mouse move diff %f seconds (%lld ticks)", diff_sec, diff_ticks);
