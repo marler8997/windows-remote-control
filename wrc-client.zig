@@ -34,14 +34,14 @@ const WM_USER_DEFERRED_MOUSE_MOVE = WM_USER + 2;
 const Direction = enum { left, top, right, bottom };
 const Config = struct {
     remote_host: ?[]const u8,
-    remote_direction: Direction,
-    remote_offset: u32,
+    mouse_portal_direction: Direction,
+    mouse_portal_offset: u32,
 
     pub fn default() Config {
         return .{
             .remote_host = null,
-            .remote_direction = .left,
-            .remote_offset = 0,
+            .mouse_portal_direction = .left,
+            .mouse_portal_offset = 0,
         };
     }
 };
@@ -344,14 +344,13 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
                 if (global.remote.enabled) {
                     global.remote.enabled = false;
                 } else {
-                    global.remote.enabled = true;
                     //
                     // TODO: initialize this correctly
                     //
                     if (global.local_input.mouse_point) |p| {
-                        global.remote.input.mouse_point = p;
+                        enableRemoteControl(p);
                     } else {
-                        global.remote.input.mouse_point = .{.x=0,.y=0};
+                        enableRemoteControl(.{.x=0,.y=0});
                     }
                 }
             }
@@ -391,6 +390,13 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
         },
         else => return DefWindowProc(hwnd, message, wParam, lParam),
     }
+}
+
+fn enableRemoteControl(point: POINT) void {
+    std.debug.assert(global.remote.enabled == false);
+    global.remote.enabled = true;
+    global.remote.input.mouse_point = point;
+    // TODO: is there a way to hide the mouse cursor?  should we if there is?
 }
 
 const WINDOW_CLASS = _T("WindowsRemoteControlClient");
@@ -465,6 +471,15 @@ fn sendMouseMove(point: POINT, allow_defer: bool) void {
     globalSockSendFull(&buf);
 }
 
+fn mouseInPortal(point: POINT) bool {
+    switch (global.config.mouse_portal_direction) {
+        .left => return point.x < 0,
+        .top => return point.y < 0,
+        .right => return point.x >= global.screen_size.x,
+        .bottom => return point.y >= global.screen_size.y,
+    }
+}
+
 fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT {
     var do_invalidate: bool = false;
     if (code < 0) {
@@ -496,7 +511,16 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
                     sendMouseMove(global.remote.input.mouse_point.?, true);
                 }
             } else {
-                global.local_input.mouse_point = data.pt;
+                if (mouseInPortal(data.pt)) {
+                    // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                    // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                    // TODO: set point correctly
+                    // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                    // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                    enableRemoteControl(.{.x=100,.y=100});
+                } else {
+                    global.local_input.mouse_point = data.pt;
+                }
             }
         } else if (wParam == WM_LBUTTONDOWN) {
             if (global.remote.enabled) {
@@ -610,8 +634,8 @@ fn loadConfig(allocator: *std.mem.Allocator, filename: []const u8, config_file: 
     const root_obj = tree.root.Object;
     try jsonObjEnforceKnownFields(root_obj, &[_][]const u8 {
         "remote_host",
-        "remote_direction",
-        "remote_offset",
+        "mouse_portal_direction",
+        "mouse_portal_offset",
     }, filename);
 
     var config = Config.default();
