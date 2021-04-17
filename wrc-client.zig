@@ -365,7 +365,7 @@ fn globalSockSendFull(buf: []const u8) void {
 
 fn sendMouseLeft(arg: u8) void {
     if (global.sock_connected) {
-        //globalSockSendFull(&[_]u8 { proto.mouse_left, arg });
+        globalSockSendFull(&[_]u8 { proto.mouse_left, arg });
     }
 }
 fn sendMouseMove(point: POINT) void {
