@@ -117,7 +117,7 @@ fn handleClientSock(client: *Client) void {
 
 fn memcpyUpward(dest: [*]u8, src: [*]const u8, len: usize) void {
     var i: usize = 0;
-    while (i < len) {
+    while (i < len) : (i += 1) {
         dest[i] = src[i];
     }
 }
@@ -133,6 +133,7 @@ fn handleListenSock(listen_sock: SOCKET, client: *Client) !void
     }
     std.log.info("accepted connection from {}", .{from});
     if (client.sock == INVALID_SOCKET) {
+        // TODO: set socket to nonblocking??
         client.setSock(new_sock);
     } else {
         std.log.info("refusing new client (already have client)", .{});
