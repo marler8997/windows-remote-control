@@ -19,10 +19,9 @@ After initial connection, the server responds with 8 bytes, the `x` and `y` scre
 
 # TODO:
 
+* fix bug, if you go through mouse portal speeding towards the outer edge of it
 * mouse wheel events
 * keyboard input
-* debug initial input latency
 * fix window flickering
 * configuration through the UI
 * have server run in Admin mode to allow it to work when admin processes take the foreground
-* have server send resolution, use it to limit mouse movements
