@@ -537,25 +537,30 @@ fn sendMouseMove(remote: *Conn.Ready, defer_control: enum {allow_defer, no_defer
     globalSockSendFull(remote, &buf);
 }
 
+fn portalShift(pos: i32, local_size: i32, remote_size: i32) i32 {
+    if (local_size == remote_size) {
+        return pos;
+    }
+    return @floatToInt(i32, @intToFloat(f32, pos) * @intToFloat(f32, remote_size) / @intToFloat(f32, local_size));
+}
 
 fn portal(point: POINT, direction: Direction, local_size: POINT, remote_size: POINT) ?POINT {
     // TODO: take global.config.mouse_portal_offset into account
-    // TODO: also allow portal to be resized, scale accordingly
     switch (direction) {
         .left => return if (point.x >= 0) null else .{
             .x = remote_size.x + point.x,
-            .y = point.y,
+            .y = portalShift(point.y, local_size.y, remote_size.y),
         },
         .top => return if (point.y >= 0) null else .{
-            .x = point.x,
+            .x = portalShift(point.x, local_size.x, remote_size.x),
             .y = remote_size.y + point.y,
         },
         .right => return if (point.x < local_size.x) null else .{
             .x = point.x - local_size.x,
-            .y = point.y,
+            .y = portalShift(point.y, local_size.y, remote_size.y),
         },
         .bottom => return if (point.y  < local_size.y) null else .{
-            .x = point.x,
+            .x = portalShift(point.x, local_size.x, remote_size.x),
             .y = point.y - local_size.y,
         },
     }
@@ -581,12 +586,12 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
         invalidateRect();
         if (wParam == WM_MOUSEMOVE) {
             const data = @intToPtr(*MOUSEHOOKSTRUCT, @bitCast(usize, lParam));
-            log("[DEBUG] mousemove {} x {}", .{data.pt.x, data.pt.y});
+            //log("[DEBUG] mousemove {} x {}", .{data.pt.x, data.pt.y});
             if (global.conn.controlEnabled()) |remote_ref| {
                 const local_mouse_point = getCursorPos();
                 const diff_x = data.pt.x - local_mouse_point.x;
                 const diff_y = data.pt.y - local_mouse_point.y;
-                const next_remote_mouse_point = POINT {
+                var next_remote_mouse_point = POINT {
                     .x = remote_ref.mouse_point.x + diff_x,
                     .y = remote_ref.mouse_point.y + diff_y,
                 };
@@ -605,6 +610,18 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
                         return 1; // swallow this event
                     }
                 } else {
+                    // keep remote mouse in bounds
+                    if (next_remote_mouse_point.x < 0) {
+                        next_remote_mouse_point.x = 0;
+                    } else if (next_remote_mouse_point.x >= remote_ref.screen_size.x) {
+                        next_remote_mouse_point.x = remote_ref.screen_size.x - 1;
+                    }
+                    if (next_remote_mouse_point.y < 0) {
+                        next_remote_mouse_point.y = 0;
+                    } else if (next_remote_mouse_point.y >= remote_ref.screen_size.y) {
+                        next_remote_mouse_point.y = remote_ref.screen_size.y - 1;
+                    }
+
                     if (
                         next_remote_mouse_point.x != remote_ref.mouse_point.x or
                         next_remote_mouse_point.y != remote_ref.mouse_point.y
