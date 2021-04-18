@@ -537,12 +537,26 @@ fn sendMouseMove(remote: *Conn.Ready, defer_control: enum {allow_defer, no_defer
     globalSockSendFull(remote, &buf);
 }
 
-fn mouseInPortal(point: POINT) bool {
+fn mouseInPortal(remote: *Conn.Ready, point: POINT) ?POINT {
+    // TODO: take global.config.mouse_portal_offset into account
+    // TODO: also allow portal to be resized, scale accordingly
     switch (global.config.mouse_portal_direction) {
-        .left => return point.x < 0,
-        .top => return point.y < 0,
-        .right => return point.x >= global.screen_size.x,
-        .bottom => return point.y >= global.screen_size.y,
+        .left => return if (point.x >= 0) null else .{
+            .x = remote.screen_size.x + point.x,
+            .y = point.y,
+        },
+        .top => return if (point.y >= 0) null else .{
+            .x = point.x,
+            .y = remote.screen_size.y + point.y,
+        },
+        .right => return if (point.x < global.screen_size.x) null else .{
+            .x = remote.screen_size.x + (point.x - global.screen_size.x),
+            .y = point.y,
+        },
+        .bottom => return if (point.y  < global.screen_size.y) null else .{
+            .x = point.x,
+            .y = remote.screen_size.y + (point.y - global.screen_size.y),
+        },
     }
 }
 
@@ -571,11 +585,9 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
                     sendMouseMove(remote_ref, .allow_defer);
                 }
             } else {
-                if (mouseInPortal(data.pt)) {
-                    if (global.conn.isReady()) |ready_ref| {
-                        // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                        // TODO: set ready_ref.mouse_point
-                        // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                if (global.conn.isReady()) |ready_ref| {
+                    if (mouseInPortal(ready_ref, data.pt)) |remote_point| {
+                        ready_ref.mouse_point = remote_point;
                         ready_ref.control_enabled = true;
                     } else {
                         log("ignoring mouse portal because connection is not ready", .{});
