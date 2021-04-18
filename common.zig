@@ -1,5 +1,7 @@
 const std = @import("std");
 const win32 = @import("win32");
+usingnamespace win32.api.system_services;
+usingnamespace win32.api.debug;
 usingnamespace win32.api.display_devices;
 usingnamespace win32.api.windows_and_messaging;
 usingnamespace win32.api.win_sock;
@@ -41,6 +43,22 @@ pub fn sendFull(s: SOCKET, buf: []const u8) !void {
             return error.SocketSendFailed;
         total += @intCast(usize, sent);
     }
+}
+
+pub fn tryRecv(s: SOCKET, buf: []u8) !usize {
+    // TODO: the data type for recv is not correct
+    const len = recv(s, @ptrCast(*i8, buf), @intCast(i32, buf.len), 0);
+    if (len <= 0) {
+        if (len == 0) {
+            return error.SocketShutdown;
+        }
+        const err = GetLastError();
+        if (err == WSAECONNRESET) {
+            return error.SocketShutdown;
+        }
+        return error.RecvFailed;
+    }
+    return @intCast(usize, len);
 }
 
 pub fn getScreenSize() POINT {

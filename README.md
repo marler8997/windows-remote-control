@@ -15,9 +15,7 @@ Client To Server Messages:
 
 Server To Client Messages:
 
-| Command    | ID | Args             |
-|------------|----|------------------|
-| ScreenSize | 1  | `x: u32` `y: u32` |
+After initial connection, the server responds with 8 bytes, the `x` and `y` screen resolution as 32-bit unsigned integers.
 
 # TODO:
 

@@ -148,28 +148,19 @@ fn handleClientSock(client: *Client) void {
     const buffer: []u8 = &buffer_storage;
 
     @memcpy(buffer.ptr, &client.leftover, client.leftover_len);
-    const recv_buf = buffer.ptr + client.leftover_len;
-    const recv_buf_len = buffer.len - client.leftover_len;
 
     // TODO: the data type for recv is not correct
-    const len = recv(client.sock, @ptrCast(*i8, recv_buf), @intCast(i32, recv_buf_len), 0);
-    if (len <= 0) {
-        if (len == 0) {
-          std.log.info("client closed connection", .{});
-        } else {
-            const err = GetLastError();
-            if (err == WSAECONNRESET) {
-              std.log.info("client closed connection", .{});
-            } else {
-              std.log.info("recv function failed with {}", .{err});
-            }
+    const len = common.tryRecv(client.sock, buffer[client.leftover_len..]) catch |e| {
+        switch (e) {
+            error.SocketShutdown => std.log.info("client closed connection", .{}),
+            error.RecvFailed => std.log.info("recv function failed with {}", .{GetLastError()}),
         }
         if (closesocket(client.sock) != 0) unreachable;
         client.sock = INVALID_SOCKET;
         return;
-    }
+    };
     //std.log.info("[DEBUG] got {} bytes", .{len});
-    const total = client.leftover_len + @intCast(usize, len);
+    const total = client.leftover_len + len;
     const processed = processClientData(client, buffer[0..total]) orelse {
         // error already logged
         if (closesocket(client.sock) != 0) unreachable;
@@ -192,10 +183,9 @@ fn handleListenSock(listen_sock: SOCKET, client: *Client) !void
     }
     std.log.info("accepted connection from {}", .{from});
     if (client.sock == INVALID_SOCKET) {
-        var msg: [9]u8 = undefined;
-        msg[0] = @enumToInt(proto.ServerToClientMsg.screen_size);
-        std.mem.writeIntBig(i32, msg[1..5], global.screen_size.x);
-        std.mem.writeIntBig(i32, msg[5..9], global.screen_size.y);
+        var msg: [8]u8 = undefined;
+        std.mem.writeIntBig(i32, msg[0..4], global.screen_size.x);
+        std.mem.writeIntBig(i32, msg[4..8], global.screen_size.y);
         common.sendFull(new_sock, &msg) catch {
             std.log.err("failed to send screen size to client, error={}", .{GetLastError()});
             _ = shutdown(new_sock, SD_BOTH);

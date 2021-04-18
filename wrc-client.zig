@@ -47,9 +47,57 @@ const Config = struct {
 };
 
 const InputState = struct {
-    mouse_point: ?POINT,
-    mouse_left_down: ?bool,
-    mouse_right_down: ?bool,
+    mouse_down: [2]?bool,
+};
+
+const Conn = union(enum) {
+    None: void,
+    Connecting: Connecting,
+    ReceivingScreenSize: ReceivingScreenSize,
+    Ready: Ready,
+
+    pub const Connecting = struct {
+        sock: SOCKET,
+    };
+    pub const ReceivingScreenSize = struct {
+        sock: SOCKET,
+        recv_buf: [8]u8,
+        recv_len: u8,
+    };
+    pub const Ready = struct {
+        sock: SOCKET,
+        screen_size: POINT,
+        control_enabled: bool,
+        mouse_point: POINT,
+        input: InputState,
+    };
+
+    pub fn closeSocketAndReset(self: *Conn) void {
+        if (self.getSocket()) |s| {
+            if (closesocket(s) != 0) unreachable;
+        }
+        self.* = Conn.None;
+    }
+    pub fn getSocket(self: Conn) ?SOCKET {
+        return switch(self) {
+            .None => return null,
+            .Connecting => |c| return c.sock,
+            .ReceivingScreenSize => |c| return c.sock,
+            .Ready => |c| return c.sock,
+        };
+    }
+    pub fn isReady(self: *Conn) ?*Ready {
+        return switch (self.*) {
+            .Ready => return &self.Ready,
+            else => return null,
+        };
+    }
+    pub fn controlEnabled(self: *Conn) ?*Ready {
+        switch (self.*) {
+            .Ready => return if (self.Ready.control_enabled) &self.Ready else null,
+            else => return null,
+        }
+    }
 };
 
 const global = struct {
@@ -61,26 +109,16 @@ const global = struct {
     var window_msg_counter: u8 = 0;
     var screen_size: POINT = undefined;
 
-    pub const remote = struct {
-        pub var enabled: bool = false;
-        pub var input: InputState = .{
-            .mouse_point = null,
-            .mouse_left_down = null,
-            .mouse_right_down = null,
-        };
-    };
     pub var mouse_msg_forward: u32 = 0;
     pub var mouse_msg_hc_action: u32 = 0;
     pub var mouse_msg_hc_noremove: u32 = 0;
     pub var mouse_msg_unknown: u32 = 0;
+    pub var local_mouse_point: ?POINT = null;
     pub var local_input = InputState {
-        .mouse_point = null,
-        .mouse_left_down = null,
-        .mouse_right_down = null,
+        .mouse_down = [_]?bool { null, null },
     };
 
-    pub var sock: SOCKET = INVALID_SOCKET;
-    pub var sock_connected: bool = false;
+    pub var conn: Conn = Conn.None;
 
     pub var last_send_mouse_move_tick: u64 = 0;
     pub var deferred_mouse_move_msg: ?@TypeOf(window_msg_counter) = null;
@@ -88,13 +126,13 @@ const global = struct {
 };
 
 fn getCursorPos() POINT {
-    if (global.local_input.mouse_point) |p| return p;
+    if (global.local_mouse_point) |p| return p;
     var mouse_point : POINT = undefined;
     if (0 == GetCursorPos(&mouse_point)) {
         messageBoxF("GetCursorPos failed with {}", .{GetLastError()});
         ExitProcess(1);
     }
-    global.local_input.mouse_point = mouse_point;
+    global.local_mouse_point = mouse_point;
     return mouse_point;
 }
 
@@ -210,8 +248,10 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) error{AlreadyReported}!void {
             return error.AlreadyReported;
         };
         startConnect(&addr);
-        if (global.sock == INVALID_SOCKET)
-            return error.AlreadyReported;
+        switch (global.conn) {
+            .Connecting => {},
+            else => return error.AlreadyReported,
+        }
     }
 
     // TODO: check for errors?
@@ -283,59 +323,73 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
                 std.debug.assert(result != 0);
             }
 
+            var remote_state: struct {
+                screen_size: POINT = .{ .x = 0, .y = 0 },
+                mouse_point: POINT = .{ .x = 0, .y = 0 },
+                input: InputState = .{ .mouse_down = [_]?bool { null, null } },
+            } = .{};
+            const ui_status: []const u8 = blk: { switch (global.conn) {
+                .None => break :blk "not connected",
+                .Connecting => break :blk "connecting...",
+                .ReceivingScreenSize => break :blk "receiving screen size...",
+                .Ready => {
+                    const c = &global.conn.Ready;
+                    if (c.control_enabled) {
+                        remote_state.screen_size = c.screen_size;
+                        remote_state.mouse_point = c.mouse_point;
+                        remote_state.input = c.input;
+                        break :blk "controlling";
+                    }
+                    break :blk "ready";
+                },
+            }};
             var mouse_row: i32 = 0;
-            renderStringMax300(hdc, 0, mouse_row + 0, "REMOTE: {}", .{global.remote.enabled});
+            renderStringMax300(hdc, 0, mouse_row + 0, "{s}", .{ui_status});
             const local_mouse_point = getCursorPos();
-            const remote_mouse_point = if (global.remote.enabled) global.remote.input.mouse_point.? else POINT { .x = 0, .y = 0 };
-            renderStringMax300(hdc, 0, mouse_row + 1, "screen {}x{} mouse {}x{} remote {}x{}", .{
+            renderStringMax300(hdc, 0, mouse_row + 1, "LOCAL | screen {}x{} mouse {}x{} left={s} right={s}", .{
                 global.screen_size.x, global.screen_size.y,
                 local_mouse_point.x, local_mouse_point.y,
-                remote_mouse_point.x, remote_mouse_point.y,
+                fmtOptBool(global.local_input.mouse_down[0]), fmtOptBool(global.local_input.mouse_down[1]),
             });
-            renderStringMax300(hdc, 1, mouse_row + 2, "forward: {}", .{global.mouse_msg_forward});
-            renderStringMax300(hdc, 1, mouse_row + 3, "hc_action: {}", .{global.mouse_msg_hc_action});
-            renderStringMax300(hdc, 1, mouse_row + 4, "hc_noremove: {}", .{global.mouse_msg_hc_noremove});
-            renderStringMax300(hdc, 1, mouse_row + 5, "unknown: {}", .{global.mouse_msg_unknown});
-            renderStringMax300(hdc, 1, mouse_row + 6, "buttons: left={s} right={s} remote: left={s} right={s}", .{
-                               fmtOptBool(global.local_input.mouse_left_down), fmtOptBool(global.local_input.mouse_right_down),
-                               fmtOptBool(global.remote.input.mouse_left_down), fmtOptBool(global.remote.input.mouse_right_down)});
-            if (global.sock == INVALID_SOCKET) {
-                std.debug.assert(global.sock_connected == false);
-                renderStringMax300(hdc, 0, 8, "not connected", .{});
-            } else if (!global.sock_connected) {
-                renderStringMax300(hdc, 0, 8, "connecting...", .{});
-            } else {
-                renderStringMax300(hdc, 0, 8, "connected", .{});
-            }
+            renderStringMax300(hdc, 0, mouse_row + 2, "REMOTE| screen {}x{} mouse {}x{} left={s} right={s}", .{
+                remote_state.screen_size.x, remote_state.screen_size.y,
+                remote_state.mouse_point.x, remote_state.mouse_point.y,
+                fmtOptBool(remote_state.input.mouse_down[0]), fmtOptBool(remote_state.input.mouse_down[1]),
+            });
+            renderStringMax300(hdc, 1, mouse_row + 3, "forward: {}", .{global.mouse_msg_forward});
+            renderStringMax300(hdc, 1, mouse_row + 4, "hc_action: {}", .{global.mouse_msg_hc_action});
+            renderStringMax300(hdc, 1, mouse_row + 5, "hc_noremove: {}", .{global.mouse_msg_hc_noremove});
+            renderStringMax300(hdc, 1, mouse_row + 6, "unknown: {}", .{global.mouse_msg_unknown});
             return 0;
         },
         WM_USER_DEFERRED_MOUSE_MOVE => {
             const msg_counter = global.deferred_mouse_move_msg orelse @panic("codebug");
             global.deferred_mouse_move_msg = null;
             if (global.deferred_mouse_move) |point| {
-                // prevent polling by stopping the defer message sequence if
-                // there was no messages processed between now and when the message
-                // was deferred.  I should explore using a windows timer message
-                // to delay the message.
-                const allow_defer = (msg_counter +% 1 != global.window_msg_counter);
-                // sendMouseMove will set deferred_mouse_move to null
-                sendMouseMove(point, allow_defer);
+                if (global.conn.controlEnabled()) |remote_ref| {
+                    remote_ref.mouse_point = point;
+                    // NOTE: sendMouseMove will set deferred_mouse_move to null
+                    // prevent polling by stopping the defer message sequence if
+                    // there was no messages processed between now and when the message
+                    // was deferred.  I should explore using a windows timer message
+                    // to delay the message.
+                    sendMouseMove(remote_ref,
+                        if (msg_counter +% 1 == global.window_msg_counter) .no_defer
+                        else .allow_defer);
+                }
             }
             return 0;
         },
         WM_KEYDOWN => {
             if (wParam == VK_ESCAPE) {
-                if (global.remote.enabled) {
-                    global.remote.enabled = false;
-                } else {
-                    //
-                    // TODO: initialize this correctly
-                    //
-                    if (global.local_input.mouse_point) |p| {
-                        enableRemoteControl(p);
+                if (global.conn.isReady()) |ready_ref| {
+                    if (ready_ref.control_enabled) {
+                        ready_ref.control_enabled = false;
                     } else {
-                        enableRemoteControl(.{.x=0,.y=0});
+                        ready_ref.control_enabled = true;
                     }
+                } else {
+                    log("ignoring ESC because connection is not ready", .{});
                 }
             }
             invalidateRect();
@@ -345,22 +399,70 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
             const event = WSAGETSELECTEVENT(lParam);
             if (event == FD_CLOSE) {
                 log("socket closed", .{});
-                global.sock_connected = false;
-                if (closesocket(global.sock) != 0) unreachable;
-                global.sock = INVALID_SOCKET;
+                global.conn.closeSocketAndReset();
                 invalidateRect();
             } else if (event == FD_CONNECT) {
-                std.debug.assert(global.sock_connected == false);
+                const c = switch (global.conn) {
+                    .Connecting => &global.conn.Connecting,
+                    else => @panic("codebug?"),
+                };
                 const err = WSAGETSELECTERROR(lParam);
                 if (err != 0) {
                     log("socket connect failed", .{});
-                    if (closesocket(global.sock) != 0) unreachable;
-                    global.sock = INVALID_SOCKET;
+                    global.conn.closeSocketAndReset();
                 } else {
                     log("socket connect success???", .{});
-                    global.sock_connected = true;
+                    const next_conn = Conn { .ReceivingScreenSize = .{
+                        .sock = c.sock,
+                        .recv_buf = undefined,
+                        .recv_len = 0,
+                    }};
+                    global.conn = next_conn;
                 }
                 invalidateRect();
+            } else if (event == FD_READ) {
+                const c = switch (global.conn) {
+                    .None => unreachable,
+                    .Connecting => unreachable,
+                    .ReceivingScreenSize => &global.conn.ReceivingScreenSize,
+                    .Ready => {
+                        log("server unexpectedly sent more data", .{});
+                        global.conn.closeSocketAndReset();
+                        return 0;
+                    },
+                };
+                const len = common.tryRecv(c.sock, c.recv_buf[c.recv_len..]) catch |e| {
+                    switch (e) {
+                        error.SocketShutdown => log("connection closed", .{}),
+                        error.RecvFailed => log("recv function failed with {}", .{GetLastError()}),
+                    }
+                    global.conn.closeSocketAndReset();
+                    return 0;
+                };
+                const total = c.recv_len + len;
+                if (total > 8) {
+                    log("got too many bytes from server", .{});
+                    global.conn.closeSocketAndReset();
+                    return 0;
+                }
+
+                c.recv_len = @intCast(u8, total);
+                if (c.recv_len < 8) {
+                    log("got {} bytes but need 8 for screen size", .{c.recv_len});
+                    return 0;
+                }
+                const screen_size = POINT {
+                    .x = std.mem.readIntBig(i32, c.recv_buf[0..4]),
+                    .y = std.mem.readIntBig(i32, c.recv_buf[4..8]),
+                };
+                const next_conn = Conn { .Ready = .{
+                    .sock = c.sock,
+                    .screen_size = screen_size,
+                    .control_enabled = false,
+                    .mouse_point = .{ .x = @divTrunc(screen_size.x, 2), .y = @divTrunc(screen_size.y, 2) },
+                    .input = .{ .mouse_down = [_]?bool { null, null} },
+                }};
+                global.conn = next_conn;
             } else {
                 log("FATAL_ERROR(bug) socket event, expected {} or {} but got {}", .{
                    FD_CLOSE, FD_CONNECT, event});
@@ -376,45 +478,35 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
     }
 }
 
-fn enableRemoteControl(point: POINT) void {
-    std.debug.assert(global.remote.enabled == false);
-    global.remote.enabled = true;
-    global.remote.input.mouse_point = point;
-    // TODO: is there a way to hide the mouse cursor?  should we if there is?
-}
-
 const WINDOW_CLASS = _T("WindowsRemoteControlClient");
 
 
-fn globalSockSendFull(buf: []const u8) void {
-    std.debug.assert(global.sock != INVALID_SOCKET);
-    std.debug.assert(global.sock_connected);
-    common.sendFull(global.sock, buf) catch {
-        global.sock_connected = false;
-        _ = shutdown(global.sock, SD_BOTH);
-        if (closesocket(global.sock) != 0) unreachable;
-        global.sock = INVALID_SOCKET;
+fn globalSockSendFull(remote: *Conn.Ready, buf: []const u8) void {
+    std.debug.assert(remote.control_enabled);
+    common.sendFull(remote.sock, buf) catch {
+        global.conn.closeSocketAndReset();
+        //remote.closeSocketAndReset();
         invalidateRect();
     };
 }
 
-fn sendMouseButton(button: u8, down: u8) void {
-    if (global.sock_connected) {
-        globalSockSendFull(&[_]u8 { @enumToInt(proto.ClientToServerMsg.mouse_button), button, down });
-    }
+fn sendMouseButton(remote: *Conn.Ready, button: u8) void {
+    std.debug.assert(remote.control_enabled);
+    globalSockSendFull(remote, &[_]u8 {
+        @enumToInt(proto.ClientToServerMsg.mouse_button),
+        button,
+        if (remote.input.mouse_down[button].?) 1 else 0,
+    });
 }
-fn sendMouseMove(point: POINT, allow_defer: bool) void {
+fn sendMouseMove(remote: *Conn.Ready, defer_control: enum {allow_defer, no_defer}) void {
+    std.debug.assert(remote.control_enabled);
     global.deferred_mouse_move = null; // invalidate any deferred mouse moves
-    if (!global.sock_connected) {
-        return;
-    }
-    std.debug.assert(global.sock != INVALID_SOCKET);
 
     //
     // TODO: can we inspect the windows message queue for any more mouse events before sending this one?
     //
     const limit_mouse_move_bandwidth = true;
-    if (limit_mouse_move_bandwidth and allow_defer) {
+    if (limit_mouse_move_bandwidth and (defer_control == .allow_defer)) {
         const now = std.os.windows.QueryPerformanceCounter();
         const diff_ticks = now - global.last_send_mouse_move_tick;
         const diff_sec = @intToFloat(f32, diff_ticks) / global.tick_frequency;
@@ -429,7 +521,7 @@ fn sendMouseMove(point: POINT, allow_defer: bool) void {
                 }
                 global.deferred_mouse_move_msg = global.window_msg_counter;
             }
-            global.deferred_mouse_move = point;
+            global.deferred_mouse_move = remote.mouse_point;
             return;
         }
         //log("mouse move diff %f seconds (%lld ticks)", diff_sec, diff_ticks);
@@ -439,10 +531,10 @@ fn sendMouseMove(point: POINT, allow_defer: bool) void {
     // NOTE: x and y can be out of range of the resolution
     var buf: [9]u8 = undefined;
     buf[0] = @enumToInt(proto.ClientToServerMsg.mouse_move);
-    std.mem.writeIntBig(i32, buf[1..5], point.x);
-    std.mem.writeIntBig(i32, buf[5..9], point.y);
-    //log("mouse move {} x {}", .{point.x, point.y});
-    globalSockSendFull(&buf);
+    std.mem.writeIntBig(i32, buf[1..5], remote.mouse_point.x);
+    std.mem.writeIntBig(i32, buf[5..9], remote.mouse_point.y);
+    //log("mouse move {} x {}", .{remote.point.x, remote.point.y});
+    globalSockSendFull(remote, &buf);
 }
 
 fn mouseInPortal(point: POINT) bool {
@@ -455,89 +547,83 @@ fn mouseInPortal(point: POINT) bool {
 }
 
 fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT {
-    var do_invalidate: bool = false;
     if (code < 0) {
         global.mouse_msg_forward += 1;
     } else if (code == HC_ACTION) {
         global.mouse_msg_hc_action += 1;
-        do_invalidate = true;
+        invalidateRect();
         if (wParam == WM_MOUSEMOVE) {
             const data = @intToPtr(*MOUSEHOOKSTRUCT, @bitCast(usize, lParam));
             //log("[DEBUG] mousemove {} x {}", .{data.pt.x, data.pt.y});
-            if (global.remote.enabled) {
+            if (global.conn.controlEnabled()) |remote_ref| {
                 const local_mouse_point = getCursorPos();
                 const diff_x = data.pt.x - local_mouse_point.x;
                 const diff_y = data.pt.y - local_mouse_point.y;
                 const next_remote_mouse_point = POINT {
-                    .x = global.remote.input.mouse_point.?.x + diff_x,
-                    .y = global.remote.input.mouse_point.?.y + diff_y,
+                    .x = remote_ref.mouse_point.x + diff_x,
+                    .y = remote_ref.mouse_point.y + diff_y,
                 };
-                const moved = blk: {
-                    if (global.remote.input.mouse_point) |p| {
-                        if (next_remote_mouse_point.x == p.x and next_remote_mouse_point.y == p.y) {
-                            break :blk false;
-                        }
-                    }
-                    break :blk true;
-                };
-                if (moved) {
-                    global.remote.input.mouse_point = next_remote_mouse_point;
-                    sendMouseMove(global.remote.input.mouse_point.?, true);
+                if (
+                    next_remote_mouse_point.x != remote_ref.mouse_point.x or
+                    next_remote_mouse_point.y != remote_ref.mouse_point.y
+                ) {
+                    remote_ref.mouse_point = next_remote_mouse_point;
+                    sendMouseMove(remote_ref, .allow_defer);
                 }
             } else {
                 if (mouseInPortal(data.pt)) {
-                    // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                    // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                    // TODO: set point correctly
-                    // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                    // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                    enableRemoteControl(.{.x=100,.y=100});
+                    if (global.conn.isReady()) |ready_ref| {
+                        // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                        // TODO: set ready_ref.mouse_point
+                        // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                        ready_ref.control_enabled = true;
+                    } else {
+                        log("ignoring mouse portal because connection is not ready", .{});
+                        global.local_mouse_point = data.pt;
+                    }
                 } else {
-                    global.local_input.mouse_point = data.pt;
+                    global.local_mouse_point = data.pt;
                 }
             }
         } else if (wParam == WM_LBUTTONDOWN) {
-            if (global.remote.enabled) {
-                global.remote.input.mouse_left_down = true;
-                sendMouseButton(proto.mouse_button_left, 1);
+            if (global.conn.controlEnabled()) |remote_ref| {
+                remote_ref.input.mouse_down[proto.mouse_button_left] = true;
+                sendMouseButton(remote_ref, proto.mouse_button_left);
             } else {
-                global.local_input.mouse_left_down = true;
+                global.local_input.mouse_down[proto.mouse_button_left] = true;
             }
         } else if (wParam == WM_LBUTTONUP) {
-            if (global.remote.enabled) {
-                global.remote.input.mouse_left_down = false;
-                sendMouseButton(proto.mouse_button_left, 0);
+            if (global.conn.controlEnabled()) |remote_ref| {
+                remote_ref.input.mouse_down[proto.mouse_button_left] = false;
+                sendMouseButton(remote_ref, proto.mouse_button_left);
             } else {
-                global.local_input.mouse_left_down = false;
+                global.local_input.mouse_down[proto.mouse_button_left] = false;
             }
         } else if (wParam == WM_RBUTTONDOWN) {
-            if (global.remote.enabled) {
-                global.remote.input.mouse_right_down = true;
-                sendMouseButton(proto.mouse_button_right, 1);
+            if (global.conn.controlEnabled()) |remote_ref| {
+                remote_ref.input.mouse_down[proto.mouse_button_right] = true;
+                sendMouseButton(remote_ref, proto.mouse_button_right);
             } else {
-                global.local_input.mouse_right_down = true;
+                global.local_input.mouse_down[proto.mouse_button_right] = true;
             }
         } else if (wParam == WM_RBUTTONUP) {
-            if (global.remote.enabled) {
-                global.remote.input.mouse_right_down = false;
-                sendMouseButton(proto.mouse_button_right, 0);
+            if (global.conn.controlEnabled()) |remote_ref| {
+                remote_ref.input.mouse_down[proto.mouse_button_right] = false;
+                sendMouseButton(remote_ref, proto.mouse_button_right);
             } else {
-                global.local_input.mouse_right_down = false;
+                global.local_input.mouse_down[proto.mouse_button_right] = false;
             }
         } else {
             log("mouseProc: HC_ACTION unknown windows message {}", .{wParam});
         }
     } else if (code == HC_NOREMOVE) {
         global.mouse_msg_hc_noremove += 1;
-        do_invalidate = true;
+        invalidateRect();
     } else {
         global.mouse_msg_unknown += 1;
-        do_invalidate = true;
-    }
-    if (do_invalidate) {
         invalidateRect();
     }
-    if (global.remote.enabled) {
+    if (global.conn.controlEnabled()) |_| {
         return 1;
     }
     return CallNextHookEx(null, code, wParam, lParam);
@@ -553,7 +639,7 @@ fn startConnect2(addr: *const std.net.Ip4Address, s: SOCKET) !void {
     // I've moved the WSAAsyncSelect call to come before calling connect, this
     // seems to solve some sort of race condition where the connect message will
     // get dropped.
-    if (0 != WSAAsyncSelect(s, global.hwnd, WM_USER_SOCKET, FD_CLOSE | FD_CONNECT)) {
+    if (0 != WSAAsyncSelect(s, global.hwnd, WM_USER_SOCKET, FD_CLOSE | FD_CONNECT| FD_READ)) {
         messageBoxF("WSAAsyncSelect failed with {}", .{WSAGetLastError()});
         return error.ConnnectFail;
     }
@@ -569,19 +655,18 @@ fn startConnect2(addr: *const std.net.Ip4Address, s: SOCKET) !void {
         }
     }
 }
-// Success if global.sock != INVALID_SOCKET
+// Success if global.conn.sock != INVALID_SOCKET
 fn startConnect(addr: *const std.net.Ip4Address) void {
-    std.debug.assert(global.sock == INVALID_SOCKET);
-    std.debug.assert(global.sock_connected == false);
+    switch (global.conn) { .None => {}, else => @panic("codebug") }
     const s = socket(std.os.AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == INVALID_SOCKET) {
         messageBoxF("socket function failed with {}", .{GetLastError()});
-        return; // fail because global.sock is still INVALID_SOCKET
+        return; // fail because global.conn.sock is still INVALID_SOCKET
     }
     if (startConnect2(addr, s)) {
-        global.sock = s; // success
+        global.conn = .{ .Connecting = .{ .sock = s } }; // success
     } else |_| {
-        if (0 != closesocket(s)) unreachable; // fail because global.sock is stil INVALID_SOCKET
+        if (0 != closesocket(s)) unreachable; // fail because global.conn.sock is stil INVALID_SOCKET
     }
 }
 

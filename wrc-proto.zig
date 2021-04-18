@@ -19,7 +19,3 @@ pub fn getClientToServerMsgInfo(first_byte: u8) ?ClientToServerMsgInfo {
         else => return null,
     };
 }
-
-pub const ServerToClientMsg = enum(u8) {
-    screen_size = 1,
-};
