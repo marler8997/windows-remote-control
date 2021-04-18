@@ -21,7 +21,6 @@ After initial connection, the server responds with 8 bytes, the `x` and `y` scre
 
 * mouse wheel events
 * keyboard input
-* mouse "portal"
 * debug initial input latency
 * fix window flickering
 * configuration through the UI

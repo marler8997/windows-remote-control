@@ -537,27 +537,40 @@ fn sendMouseMove(remote: *Conn.Ready, defer_control: enum {allow_defer, no_defer
     globalSockSendFull(remote, &buf);
 }
 
-fn mouseInPortal(remote: *Conn.Ready, point: POINT) ?POINT {
+
+fn portal(point: POINT, direction: Direction, local_size: POINT, remote_size: POINT) ?POINT {
     // TODO: take global.config.mouse_portal_offset into account
     // TODO: also allow portal to be resized, scale accordingly
-    switch (global.config.mouse_portal_direction) {
+    switch (direction) {
         .left => return if (point.x >= 0) null else .{
-            .x = remote.screen_size.x + point.x,
+            .x = remote_size.x + point.x,
             .y = point.y,
         },
         .top => return if (point.y >= 0) null else .{
             .x = point.x,
-            .y = remote.screen_size.y + point.y,
+            .y = remote_size.y + point.y,
         },
-        .right => return if (point.x < global.screen_size.x) null else .{
-            .x = remote.screen_size.x + (point.x - global.screen_size.x),
+        .right => return if (point.x < local_size.x) null else .{
+            .x = point.x - local_size.x,
             .y = point.y,
         },
-        .bottom => return if (point.y  < global.screen_size.y) null else .{
+        .bottom => return if (point.y  < local_size.y) null else .{
             .x = point.x,
-            .y = remote.screen_size.y + (point.y - global.screen_size.y),
+            .y = point.y - local_size.y,
         },
     }
+}
+fn portalLocalToRemote(remote: *Conn.Ready, point: POINT) ?POINT {
+    return portal(point, global.config.mouse_portal_direction, global.screen_size, remote.screen_size);
+}
+fn portalRemoteToLocal(remote: *Conn.Ready, point: POINT) ?POINT {
+    const reverse_direction = switch (global.config.mouse_portal_direction) {
+        .left => Direction.right,
+        .top => Direction.bottom,
+        .right => Direction.left,
+        .bottom => Direction.top,
+    };
+    return portal(point, reverse_direction, remote.screen_size, global.screen_size);
 }
 
 fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT {
@@ -568,7 +581,7 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
         invalidateRect();
         if (wParam == WM_MOUSEMOVE) {
             const data = @intToPtr(*MOUSEHOOKSTRUCT, @bitCast(usize, lParam));
-            //log("[DEBUG] mousemove {} x {}", .{data.pt.x, data.pt.y});
+            log("[DEBUG] mousemove {} x {}", .{data.pt.x, data.pt.y});
             if (global.conn.controlEnabled()) |remote_ref| {
                 const local_mouse_point = getCursorPos();
                 const diff_x = data.pt.x - local_mouse_point.x;
@@ -577,23 +590,39 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
                     .x = remote_ref.mouse_point.x + diff_x,
                     .y = remote_ref.mouse_point.y + diff_y,
                 };
-                if (
-                    next_remote_mouse_point.x != remote_ref.mouse_point.x or
-                    next_remote_mouse_point.y != remote_ref.mouse_point.y
-                ) {
-                    remote_ref.mouse_point = next_remote_mouse_point;
-                    sendMouseMove(remote_ref, .allow_defer);
+
+                if (portalRemoteToLocal(remote_ref, next_remote_mouse_point)) |local_point| {
+                    remote_ref.control_enabled = false;
+                    //log("transport local mouse from {} to {}", .{global.local_mouse_point, local_point});
+                    // NOTE: changing the current event and fowarding it doesn't seem to work
+                    //data.pt = local_point;
+                    //global.local_mouse_point = local_point;
+                    if (0 == SetCursorPos(local_point.x, local_point.y)) {
+                        log("WARNING: failed to set cursor pos with {}", .{GetLastError()});
+                        global.local_mouse_point = data.pt;
+                    } else {
+                        global.local_mouse_point = local_point;
+                        return 1; // swallow this event
+                    }
+                } else {
+                    if (
+                        next_remote_mouse_point.x != remote_ref.mouse_point.x or
+                        next_remote_mouse_point.y != remote_ref.mouse_point.y
+                    ) {
+                        remote_ref.mouse_point = next_remote_mouse_point;
+                        sendMouseMove(remote_ref, .allow_defer);
+                    }
                 }
             } else {
                 if (global.conn.isReady()) |ready_ref| {
-                    if (mouseInPortal(ready_ref, data.pt)) |remote_point| {
+                    if (portalLocalToRemote(ready_ref, data.pt)) |remote_point| {
                         ready_ref.mouse_point = remote_point;
                         ready_ref.control_enabled = true;
                     } else {
-                        log("ignoring mouse portal because connection is not ready", .{});
                         global.local_mouse_point = data.pt;
                     }
                 } else {
+                    // TODO: log if we are in the portal and connection is not ready?
                     global.local_mouse_point = data.pt;
                 }
             }
