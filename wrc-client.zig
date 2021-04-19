@@ -219,7 +219,7 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) !void {
         _T("Windows Remote Control Client"),
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        500, 200,
+        800, 200,
         null,
         null,
         hInstance,
@@ -289,23 +289,6 @@ pub fn panicf(comptime fmt: []const u8, args: anytype) noreturn {
     std.os.abort();
 }
 
-
-fn renderStringMax300(hdc: HDC, column: i32, row: i32, comptime fmt: []const u8, args: anytype) void {
-    var buffer: [300]u8 = undefined;
-    var fixed_buffer_stream = std.io.fixedBufferStream(&buffer);
-    const writer = fixed_buffer_stream.writer();
-    if (std.fmt.format(writer, fmt, args)) {
-        var widebuf: [buffer.len+1]u16 = undefined;
-        const len = std.unicode.utf8ToUtf16Le(&widebuf, buffer[0..fixed_buffer_stream.pos]) catch @panic("codebug?");
-        // Issue: the widebuf argument does not need to be null-terminated, need to fix the bindings
-        const result = TextOut(hdc, 5 + 15 * column, 5 + 15 * row,
-            std.meta.assumeSentinel(@as([*]const u16, &widebuf), 0), @intCast(i32, len));
-        std.debug.assert(result != 0);
-        return;
-    } else |_| { }
-    panicf("failed to format message for render", .{});
-}
-
 fn invalidateRect() void {
     if (InvalidateRect(global.hwnd, null, TRUE) == 0) @panic("error that needs to be handled?");
 }
@@ -315,16 +298,79 @@ fn fmtOptBool(opt_bool: ?bool) []const u8 {
     return "?";
 }
 
+usingnamespace @import("ui.zig");
+
+const render = struct {
+    const top_margin = 10;
+    const left_margin = 10;
+
+    var static_drawn = false;
+
+    var conn_state = GdiString {
+        .x = left_margin,
+        .y = top_margin + 0 * font_height,
+    };
+    var local_info = GdiString {
+        .x = left_margin,
+        .y = top_margin + 1 * font_height,
+    };
+    var remote_info = GdiString {
+        .x = left_margin,
+        .y = top_margin + 2 * font_height,
+    };
+
+    const mouse_event_counts_y = top_margin + 4 * font_height;
+    const forward_label = "forward: ";
+    var forward = GdiNum(u32) { .string = .{
+        .x = left_margin + (forward_label.len * font_width),
+        .y = mouse_event_counts_y + (0 * font_height),
+    }};
+    const hc_action_label = "hc_action: ";
+    var hc_action = GdiNum(u32) { .string = .{
+        .x = left_margin + (hc_action_label.len * font_width),
+        .y = mouse_event_counts_y + (1 * font_height),
+    }};
+    const hc_noremove_label = "hc_noremove: ";
+    var hc_noremove = GdiNum(u32) { .string = .{
+        .x = left_margin + (hc_noremove_label.len * font_width),
+        .y = mouse_event_counts_y + (2 * font_height),
+    }};
+    const unknown_label = "unknown: ";
+    var unknown = GdiNum(u32) { .string = .{
+        .x = left_margin + (unknown_label.len * font_width),
+        .y = mouse_event_counts_y + (3 * font_height),
+    }};
+};
+
 fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT {
     global.window_msg_counter +%= 1;
 
     switch (message) {
+        WM_ERASEBKGND => {
+            return 1;
+        },
         WM_PAINT => {
             var ps: PAINTSTRUCT = undefined;
             const hdc = BeginPaint(hwnd, &ps);
             defer {
                 const result = EndPaint(hwnd, &ps);
                 std.debug.assert(result != 0);
+            }
+            // TODO: create font once?
+            const font = CreateFontA(font_height, 0, 0, 0, 0, TRUE, 0, 0, 0,
+                .DEFAULT_PRECIS, .DEFAULT_PRECIS,
+                .DEFAULT_QUALITY, .DONTCARE, "Courier New");
+            std.debug.assert(font != null);
+            defer std.debug.assert(0 != DeleteObject(font));
+
+            _ = SelectObject(hdc, font);
+
+            if (!render.static_drawn) {
+                textOut(hdc, render.left_margin, render.forward.string.y, render.forward_label);
+                textOut(hdc, render.left_margin, render.hc_action.string.y, render.hc_action_label);
+                textOut(hdc, render.left_margin, render.hc_noremove.string.y, render.hc_noremove_label);
+                textOut(hdc, render.left_margin, render.unknown.string.y, render.unknown_label);
+                render.static_drawn = true;
             }
 
             var remote_state: struct {
@@ -338,32 +384,40 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
                 .ReceivingScreenSize => break :blk "receiving screen size...",
                 .Ready => {
                     const c = &global.conn.Ready;
+                    remote_state.screen_size = c.screen_size;
+                    remote_state.mouse_point = c.mouse_point;
+                    remote_state.input = c.input;
                     if (c.control_enabled) {
-                        remote_state.screen_size = c.screen_size;
-                        remote_state.mouse_point = c.mouse_point;
-                        remote_state.input = c.input;
                         break :blk "controlling";
                     }
                     break :blk "ready";
                 },
             }};
-            var mouse_row: i32 = 0;
-            renderStringMax300(hdc, 0, mouse_row + 0, "{s}", .{ui_status});
-            renderStringMax300(hdc, 0, mouse_row + 1, "LOCAL | screen {} mouse {} (event {}) left={s} right={s}", .{
-                fmtPoint(global.screen_size),
-                fmtOptPoint(global.local_mouse.last_cursor_pos),
-                fmtOptPoint(global.local_mouse.last_event_pos),
-                fmtOptBool(global.local_input.mouse_down[0]), fmtOptBool(global.local_input.mouse_down[1]),
-            });
-            renderStringMax300(hdc, 0, mouse_row + 2, "REMOTE| screen {} mouse {} left={s} right={s}", .{
-                fmtPoint(remote_state.screen_size),
-                fmtOptPoint(remote_state.mouse_point),
-                fmtOptBool(remote_state.input.mouse_down[0]), fmtOptBool(remote_state.input.mouse_down[1]),
-            });
-            renderStringMax300(hdc, 1, mouse_row + 3, "forward: {}", .{global.mouse_msg_forward});
-            renderStringMax300(hdc, 1, mouse_row + 4, "hc_action: {}", .{global.mouse_msg_hc_action});
-            renderStringMax300(hdc, 1, mouse_row + 5, "hc_noremove: {}", .{global.mouse_msg_hc_noremove});
-            renderStringMax300(hdc, 1, mouse_row + 6, "unknown: {}", .{global.mouse_msg_unknown});
+            render.conn_state.render(hdc, ui_status);
+            {
+                var buf: [300]u8 = undefined;
+                const len = sformat(&buf, "LOCAL | screen {} mouse {} (event {}) left={s} right={s}", .{
+                    fmtPoint(global.screen_size),
+                    fmtOptPoint(global.local_mouse.last_cursor_pos),
+                    fmtOptPoint(global.local_mouse.last_event_pos),
+                    fmtOptBool(global.local_input.mouse_down[0]), fmtOptBool(global.local_input.mouse_down[1]),
+                }) catch @panic("format failed");
+                render.local_info.render(hdc, buf[0..len]);
+            }
+            {
+                var buf: [300]u8 = undefined;
+                const len = sformat(&buf, "REMOTE| screen {} mouse {} left={s} right={s}", .{
+                    fmtPoint(remote_state.screen_size),
+                    fmtOptPoint(remote_state.mouse_point),
+                    fmtOptBool(remote_state.input.mouse_down[0]), fmtOptBool(remote_state.input.mouse_down[1]),
+                }) catch @panic("format failed");
+                render.remote_info.render(hdc, buf[0..len]);
+            }
+            render.forward.render(hdc, global.mouse_msg_forward);
+            render.hc_action.render(hdc, global.mouse_msg_hc_action);
+            render.hc_noremove.render(hdc, global.mouse_msg_hc_noremove);
+            render.unknown.render(hdc, global.mouse_msg_unknown);
+
             return 0;
         },
         WM_USER_DEFERRED_MOUSE_MOVE => {
