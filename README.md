@@ -26,3 +26,6 @@ After initial connection, the server responds with 8 bytes, the `x` and `y` scre
 * keyboard input
 * configuration through the UI
 * have server run in Admin mode to allow it to work when admin processes take the foreground
+* keep remote machine awake?
+* when my laptop wakes up, the cursor is not visible until I touch the trackpad.  I'm not sure if this can be solved, I think I'll need to keep the remote machine from going to sleep while it's connected.
+* I think I need to keep the remote machine awake while the connection is established.  Not sure how to do that.  Also related, I should also implement a heartbeat that means each side will detect disconnections.  Also, when the server gets a new client, it should have some way of detecting if it is the current client that has been disconnected and is reconnecting.
