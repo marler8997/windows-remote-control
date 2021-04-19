@@ -19,6 +19,8 @@ After initial connection, the server responds with 8 bytes, the `x` and `y` scre
 
 # TODO:
 
+* get panic working
+* find out if we are closing gracefully
 * mouse wheel events
 * keyboard input
 * fix window flickering
