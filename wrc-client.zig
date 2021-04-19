@@ -113,7 +113,18 @@ const global = struct {
     pub var mouse_msg_hc_action: u32 = 0;
     pub var mouse_msg_hc_noremove: u32 = 0;
     pub var mouse_msg_unknown: u32 = 0;
-    pub var local_mouse_point: ?POINT = null;
+
+    pub const local_mouse = struct {
+        // the last value returned by GetCursorPos in mouseProc
+        // this variable is only used for logging/debug
+        pub var last_cursor_pos: ?POINT = null;
+        // the last mouse point even position received in mouseProc, note, this can be different
+        // from the actual cursor pos because Windows clamps the cursor position to be inbounds,
+        // but, the event position can be located out-of-bounds of the screen
+        // this variable is only used for logging/debug
+        pub var last_event_pos: ?POINT = null;
+    };
+
     pub var local_input = InputState {
         .mouse_down = [_]?bool { null, null },
     };
@@ -126,13 +137,11 @@ const global = struct {
 };
 
 fn getCursorPos() POINT {
-    if (global.local_mouse_point) |p| return p;
     var mouse_point : POINT = undefined;
     if (0 == GetCursorPos(&mouse_point)) {
         messageBoxF("GetCursorPos failed with {}", .{GetLastError()});
         ExitProcess(1);
     }
-    global.local_mouse_point = mouse_point;
     return mouse_point;
 }
 
@@ -162,7 +171,7 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) error{AlreadyReported}!void {
     log("started", .{});
 
     global.screen_size = common.getScreenSize();
-    log("screen size {} x {}", .{global.screen_size.x, global.screen_size.y});
+    log("screen size {}", .{fmtPoint(global.screen_size)});
 
     var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = &arena_allocator.allocator;
@@ -345,15 +354,15 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
             }};
             var mouse_row: i32 = 0;
             renderStringMax300(hdc, 0, mouse_row + 0, "{s}", .{ui_status});
-            const local_mouse_point = getCursorPos();
-            renderStringMax300(hdc, 0, mouse_row + 1, "LOCAL | screen {}x{} mouse {}x{} left={s} right={s}", .{
-                global.screen_size.x, global.screen_size.y,
-                local_mouse_point.x, local_mouse_point.y,
+            renderStringMax300(hdc, 0, mouse_row + 1, "LOCAL | screen {} mouse {} (event {}) left={s} right={s}", .{
+                fmtPoint(global.screen_size),
+                fmtOptPoint(global.local_mouse.last_cursor_pos),
+                fmtOptPoint(global.local_mouse.last_event_pos),
                 fmtOptBool(global.local_input.mouse_down[0]), fmtOptBool(global.local_input.mouse_down[1]),
             });
-            renderStringMax300(hdc, 0, mouse_row + 2, "REMOTE| screen {}x{} mouse {}x{} left={s} right={s}", .{
-                remote_state.screen_size.x, remote_state.screen_size.y,
-                remote_state.mouse_point.x, remote_state.mouse_point.y,
+            renderStringMax300(hdc, 0, mouse_row + 2, "REMOTE| screen {} mouse {} left={s} right={s}", .{
+                fmtPoint(remote_state.screen_size),
+                fmtOptPoint(remote_state.mouse_point),
                 fmtOptBool(remote_state.input.mouse_down[0]), fmtOptBool(remote_state.input.mouse_down[1]),
             });
             renderStringMax300(hdc, 1, mouse_row + 3, "forward: {}", .{global.mouse_msg_forward});
@@ -533,7 +542,7 @@ fn sendMouseMove(remote: *Conn.Ready, defer_control: enum {allow_defer, no_defer
     buf[0] = @enumToInt(proto.ClientToServerMsg.mouse_move);
     std.mem.writeIntBig(i32, buf[1..5], remote.mouse_point.x);
     std.mem.writeIntBig(i32, buf[5..9], remote.mouse_point.y);
-    //log("mouse move {} x {}", .{remote.point.x, remote.point.y});
+    //log("mouse move {}", .{fmtPoint(remote.point)});
     globalSockSendFull(remote, &buf);
 }
 
@@ -586,14 +595,17 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
         invalidateRect();
         if (wParam == WM_MOUSEMOVE) {
             const data = @intToPtr(*MOUSEHOOKSTRUCT, @bitCast(usize, lParam));
-            //log("[DEBUG] mousemove {} x {}", .{data.pt.x, data.pt.y});
+            global.local_mouse.last_event_pos = data.pt;
+            global.local_mouse.last_cursor_pos = getCursorPos();
+            //log("[DEBUG] mousemove {}", .{fmtPoint(data.pt)});
             if (global.conn.controlEnabled()) |remote_ref| {
-                const local_mouse_point = getCursorPos();
-                const diff_x = data.pt.x - local_mouse_point.x;
-                const diff_y = data.pt.y - local_mouse_point.y;
+                const diff = POINT {
+                    .x = data.pt.x - global.local_mouse.last_cursor_pos.?.x,
+                    .y = data.pt.y - global.local_mouse.last_cursor_pos.?.y,
+                };
                 var next_remote_mouse_point = POINT {
-                    .x = remote_ref.mouse_point.x + diff_x,
-                    .y = remote_ref.mouse_point.y + diff_y,
+                    .x = remote_ref.mouse_point.x + diff.x,
+                    .y = remote_ref.mouse_point.y + diff.y,
                 };
 
                 if (portalRemoteToLocal(remote_ref, next_remote_mouse_point)) |local_point| {
@@ -604,9 +616,7 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
                     //global.local_mouse_point = local_point;
                     if (0 == SetCursorPos(local_point.x, local_point.y)) {
                         log("WARNING: failed to set cursor pos with {}", .{GetLastError()});
-                        global.local_mouse_point = data.pt;
                     } else {
-                        global.local_mouse_point = local_point;
                         return 1; // swallow this event
                     }
                 } else {
@@ -635,12 +645,9 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
                     if (portalLocalToRemote(ready_ref, data.pt)) |remote_point| {
                         ready_ref.mouse_point = remote_point;
                         ready_ref.control_enabled = true;
-                    } else {
-                        global.local_mouse_point = data.pt;
                     }
                 } else {
                     // TODO: log if we are in the portal and connection is not ready?
-                    global.local_mouse_point = data.pt;
                 }
             }
         } else if (wParam == WM_LBUTTONDOWN) {
@@ -796,6 +803,45 @@ pub fn SliceFormatter(comptime T: type, comptime spec: []const u8) type { return
 };}
 pub fn fmtSliceT(comptime T: type, comptime spec: []const u8, slice: []const T) SliceFormatter(T, spec) {
     return .{ .slice = slice };
+}
+
+
+fn printPoint(writer: anytype, point: POINT) !void {
+    try writer.print("{} x {}", .{point.x, point.y});
+}
+
+const PointFormatter = struct {
+    point: POINT,
+    pub fn format(
+        self: @This(),
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        try printPoint(writer, self.point);
+    }
+};
+pub fn fmtPoint(point: POINT) PointFormatter {
+    return .{ .point = point };
+}
+
+const OptPointFormatter = struct {
+    opt_point: ?POINT,
+    pub fn format(
+        self: @This(),
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        if (self.opt_point) |point| {
+            try printPoint(writer, point);
+        } else {
+            try writer.writeAll("null");
+        }
+    }
+};
+pub fn fmtOptPoint(opt_point: ?POINT) OptPointFormatter {
+    return .{ .opt_point = opt_point };
 }
 
 fn jsonObjEnforceKnownFields(map: std.json.ObjectMap, known_fields: []const []const u8, file_for_error: []const u8) !void {
