@@ -105,6 +105,7 @@ const global = struct {
     var tick_start: u64 = undefined;
     var logfile: std.fs.File = undefined;
     var config: Config = Config.default();
+    var mouse_hook: ?HHOOK = null;
     var hwnd: HWND = undefined;
     var window_msg_counter: u8 = 0;
     var screen_size: POINT = undefined;
@@ -138,36 +139,26 @@ const global = struct {
 
 fn getCursorPos() POINT {
     var mouse_point : POINT = undefined;
-    if (0 == GetCursorPos(&mouse_point)) {
-        messageBoxF("GetCursorPos failed with {}", .{GetLastError()});
-        ExitProcess(1);
-    }
+    if (0 == GetCursorPos(&mouse_point))
+        panicf("GetCursorPos failed, error={}", .{GetLastError()});
     return mouse_point;
 }
 
 pub export fn wWinMain(hInstance: HINSTANCE, removeme: HINSTANCE, pCmdLine: [*:0]u16, nCmdShow: c_int) callconv(WINAPI) c_int {
-    main2(hInstance, @intCast(u32, nCmdShow)) catch |e| switch (e) {
-        error.AlreadyReported => return 1,
-        else => |err| {
-            messageBoxF("fatal error {}", .{err});
-            return 1;
-        },
-    };
+    main2(hInstance, @intCast(u32, nCmdShow)) catch |e| panicf("fatal error {}", .{e});
     return 0;
 }
-fn main2(hInstance: HINSTANCE, nCmdShow: u32) error{AlreadyReported}!void {
+fn main2(hInstance: HINSTANCE, nCmdShow: u32) !void {
     global.tick_frequency = @intToFloat(f32, std.os.windows.QueryPerformanceFrequency());
-    if (common.wsaStartup()) |e| {
-      messageBoxF("WSAStartup failed: {}", .{e});
-      return error.AlreadyReported;
-    }
+    if (common.wsaStartup()) |e|
+        panicf("WSAStartup failed, error={}", .{e});
+
     global.tick_start = std.os.windows.QueryPerformanceCounter();
 
     const log_filename = "wrc-client.log";
-    global.logfile = std.fs.cwd().createFile(log_filename, .{}) catch |e| {
-        messageBoxF("failed to open logfile '{s}': {}", .{log_filename, e});
-        return error.AlreadyReported;
-    };
+    global.logfile = std.fs.cwd().createFile(log_filename, .{}) catch |e|
+        panicf("failed to open logfile '{s}': {}", .{log_filename, e});
+
     log("started", .{});
 
     global.screen_size = common.getScreenSize();
@@ -183,32 +174,25 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) error{AlreadyReported}!void {
                 // in the future this will not be an error, the user can enter the remote
                 // host in a text box
                 //break :blk;
-                messageBoxF("currently you must specify the remote_host in '{s}' until I implement it in the UI", .{config_filename});
-                return error.AlreadyReported;
+                panicf("missing '{s}'\ncurrently the 'remote_host' must be specified in this JSON file until I implement it in the UI", .{config_filename});
             },
             else => |err| {
-                messageBoxF("failed to open config '{s}': {}", .{config_filename, err});
-                return error.AlreadyReported;
+                panicf("failed to open config '{s}': {}", .{config_filename, err});
             },
         };
         defer config_file.close();
         global.config = try loadConfig(allocator, config_filename, config_file);
         if (global.config.remote_host) |_| { } else {
-            messageBoxF("{s} is missing the 'remote_host' field", .{config_filename});
-            return error.AlreadyReported;
+            panicf("{s} is missing the 'remote_host' field", .{config_filename});
         }
     }
     // code currently assumes this is true
     std.debug.assert(if (global.config.remote_host) |_| true else false);
 
     // add global mouse hook
-    {
-        const hook = SetWindowsHookExA(WH_MOUSE_LL, mouseProc, hInstance, 0);
-        if (hook == null) {
-            messageBoxF("SetWindowsHookExA failed with {}", .{GetLastError()});
-            return error.AlreadyReported;
-        }
-    }
+    global.mouse_hook = SetWindowsHookExA(WH_MOUSE_LL, mouseProc, hInstance, 0);
+    if (global.mouse_hook == null)
+        panicf("SetWindowsHookExA failed, error={}", .{GetLastError()});
 
     {
         const wc = WNDCLASSEX {
@@ -225,11 +209,8 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) error{AlreadyReported}!void {
             .lpszClassName  = WINDOW_CLASS,
             .hIconSm        = LoadIcon(hInstance, IDI_APPLICATION),
         };
-        if (0 == RegisterClassEx(&wc)) {
-            messageBoxF("RegisterWinClass failed with {}", .{GetLastError()});
-            return error.AlreadyReported;
-
-        }
+        if (0 == RegisterClassEx(&wc))
+            panicf("RegisterWinClass failed, error={}", .{GetLastError()});
     }
 
     global.hwnd = CreateWindowEx(
@@ -244,17 +225,15 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) error{AlreadyReported}!void {
         hInstance,
         null
     ) orelse {
-        messageBoxF("CreateWindow failed with {}", .{GetLastError()});
-        return error.AlreadyReported;
+        panicf("CreateWindow failed, error={}", .{GetLastError()});
     };
 
     log("starting connect...", .{});
     {
         const port = 1234;
         const addr = std.net.Ip4Address.parse(global.config.remote_host.?, 1234) catch |e| {
-            messageBoxF("failed to parse remote host '{s}' as an IP: {}", .{
+            panicf("failed to parse remote host '{s}' as an IP: {}", .{
                 global.config.remote_host.?, e});
-            return error.AlreadyReported;
         };
         startConnect(&addr);
         switch (global.conn) {
@@ -281,18 +260,35 @@ fn log(comptime fmt: []const u8, args: anytype) void {
     global.logfile.writer().print("{d:.5}: " ++ fmt ++ "\n", .{time} ++ args) catch @panic("log failed");
 }
 
-fn messageBoxF(comptime fmt: []const u8, args: anytype) void {
+fn fatalErrorMessageBox(msg: [:0]const u8, caption: [:0]const u8) void {
+    // always uninstall the global mouse hook before displaying the message box
+    // otherwise the messagebox message pipe will handle mouse proc events and
+    // it messes up Windows
+    if (global.mouse_hook) |h| _ = UnhookWindowsHookEx(h);
+    _ = MessageBoxA(null, msg, caption, .OK);
+}
+
+pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace) noreturn {
+    const msg_null_term = std.heap.page_allocator.dupeZ(u8, msg) catch "unable to allocate memory for panic msg";
+    fatalErrorMessageBox(msg_null_term, "Windows Remote Control Client");
+    std.os.abort();
+}
+pub fn panicf(comptime fmt: []const u8, args: anytype) noreturn {
     var buffer: [500]u8 = undefined;
     var fixed_buffer_stream = std.io.fixedBufferStream(&buffer);
     const writer = fixed_buffer_stream.writer();
-    if (std.fmt.format(writer, fmt, args)) {
-        if (writer.writeByte(0)) {
-            _ = MessageBoxA(null, std.meta.assumeSentinel(@as([]const u8, &buffer), 0), "Windows Remote Control Client", .OK);
-            return;
+    const msg: [:0]const u8 = blk: {
+        if (std.fmt.format(writer, fmt, args)) {
+            if (writer.writeByte(0)) {
+                break :blk std.meta.assumeSentinel(@as([]const u8, &buffer), 0);
+            } else |_| { }
         } else |_| { }
-    } else |_| { }
-    _ = MessageBoxA(null, "failed to format message", "Windows Remote Control Client", .OK);
+        break :blk "unabled to format panic message";
+    };
+    fatalErrorMessageBox(msg, "Windows Remote Control Client");
+    std.os.abort();
 }
+
 
 fn renderStringMax300(hdc: HDC, column: i32, row: i32, comptime fmt: []const u8, args: anytype) void {
     var buffer: [300]u8 = undefined;
@@ -307,8 +303,7 @@ fn renderStringMax300(hdc: HDC, column: i32, row: i32, comptime fmt: []const u8,
         std.debug.assert(result != 0);
         return;
     } else |_| { }
-    _ = MessageBoxA(null, "failed to format message for render", "Windows Remote Control Client", .OK);
-    ExitProcess(1);
+    panicf("failed to format message for render", .{});
 }
 
 fn invalidateRect() void {
@@ -525,8 +520,7 @@ fn sendMouseMove(remote: *Conn.Ready, defer_control: enum {allow_defer, no_defer
             //log("mouse move diff %f seconds (%lld ticks) DROPPING!", diff_sec, diff_ticks);
             if (global.deferred_mouse_move_msg == null) {
                 if (0 == PostMessage(global.hwnd, WM_USER_DEFERRED_MOUSE_MOVE, 0, 0)) {
-                    messageBoxF("PostMessage for WM_USER_DEFERRED_MOUSE_MOVE failed with {}", .{GetLastError()});
-                    ExitProcess(1);
+                    panicf("PostMessage for WM_USER_DEFERRED_MOUSE_MOVE failed, error={}", .{GetLastError()});
                 }
                 global.deferred_mouse_move_msg = global.window_msg_counter;
             }
@@ -697,16 +691,16 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
 
 fn startConnect2(addr: *const std.net.Ip4Address, s: SOCKET) !void {
     common.setNonBlocking(s) catch |_| {
-        messageBoxF("failed to set socket to non-blocking with {}", .{GetLastError()});
-        return error.ConnnectFail;
+        panicf("failed to set socket to non-blocking, error={}", .{GetLastError()});
+        //return error.ConnnectFail;
     };
 
     // I've moved the WSAAsyncSelect call to come before calling connect, this
     // seems to solve some sort of race condition where the connect message will
     // get dropped.
     if (0 != WSAAsyncSelect(s, global.hwnd, WM_USER_SOCKET, FD_CLOSE | FD_CONNECT| FD_READ)) {
-        messageBoxF("WSAAsyncSelect failed with {}", .{WSAGetLastError()});
-        return error.ConnnectFail;
+        panicf("WSAAsyncSelect failed, error={}", .{WSAGetLastError()});
+        //return error.ConnnectFail;
     }
 
     // I think we will always get an FD_CONNECT event
@@ -715,8 +709,8 @@ fn startConnect2(addr: *const std.net.Ip4Address, s: SOCKET) !void {
     } else {
         const lastError = WSAGetLastError();
         if (lastError != WSAEWOULDBLOCK) {
-            messageBoxF("connect to {} failed with {}", .{addr, GetLastError()});
-            return error.ConnnectFail;
+            panicf("connect to {} failed, error={}", .{addr, GetLastError()});
+            //return error.ConnnectFail;
         }
     }
 }
@@ -725,8 +719,8 @@ fn startConnect(addr: *const std.net.Ip4Address) void {
     switch (global.conn) { .None => {}, else => @panic("codebug") }
     const s = socket(std.os.AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == INVALID_SOCKET) {
-        messageBoxF("socket function failed with {}", .{GetLastError()});
-        return; // fail because global.conn.sock is still INVALID_SOCKET
+        panicf("socket function failed, error={}", .{GetLastError()});
+        //return; // fail because global.conn.sock is still INVALID_SOCKET
     }
     if (startConnect2(addr, s)) {
         global.conn = .{ .Connecting = .{ .sock = s } }; // success
@@ -736,75 +730,45 @@ fn startConnect(addr: *const std.net.Ip4Address) void {
 }
 
 fn loadConfig(allocator: *std.mem.Allocator, filename: []const u8, config_file: std.fs.File) !Config {
-    const content = config_file.readToEndAlloc(allocator, 9999) catch |e| {
-        messageBoxF("failed to read config file '{s}': {}", .{filename, e});
-        return error.AlreadyReported;
-    };
+    const content = config_file.readToEndAlloc(allocator, 9999) catch |e|
+        panicf("failed to read config file '{s}': {}", .{filename, e});
+
     var parser = std.json.Parser.init(allocator, false);
     defer parser.deinit();
-    var tree = parser.parse(content) catch |e| {
-        messageBoxF("config file '{s}' is not valid JSON: {}", .{filename, e});
-        return error.AlreadyReported;
-    };
+    var tree = parser.parse(content) catch |e|
+        panicf("config file '{s}' is not valid JSON: {}", .{filename, e});
     defer tree.deinit();
 
     switch (tree.root) {
         .Object => {},
-        else => {
-            messageBoxF("config file '{s}' is not a JSON object", .{filename});
-            return error.AlreadyReported;
-        },
+        else => panicf("config file '{s}' does not contain a JSON object, it contains a {s}", .{filename, @tagName(tree.root)}),
     }
-    const root_obj = tree.root.Object;
-    try jsonObjEnforceKnownFields(root_obj, &[_][]const u8 {
-        "remote_host",
-        "mouse_portal_direction",
-        "mouse_portal_offset",
-    }, filename);
 
     var config = Config.default();
-    if (root_obj.get("remote_host")) |host_node| {
-        switch (host_node) {
-            .String => |host| {
-                if (config.remote_host) |_| {
-                    messageBoxF("in config file '{s}', got multiple values for remote_host", .{filename});
-                    return error.AlreadyReported;
-                }
-                config.remote_host = allocator.dupe(u8, host) catch @panic("out of memory");
-            },
-            else => {
-                messageBoxF("in config file '{s}', expected 'remote_host' to be a String but got {s}", .{
-                    filename, @tagName(host_node)});
-                return error.AlreadyReported;
+
+    var root_it = tree.root.Object.iterator();
+    while (root_it.next()) |entry| {
+        if (std.mem.eql(u8, entry.key, "remote_host")) {
+            switch (entry.value) {
+                .String => |host| {
+                    if (config.remote_host) |_|
+                        panicf("in config file '{s}', got multiple values for remote_host", .{filename});
+                    config.remote_host = allocator.dupe(u8, host) catch @panic("out of memory");
+                },
+                else => panicf("in config file '{s}', expected 'remote_host' to be of type String but got {s}", .{
+                    filename, @tagName(entry.value)}),
             }
+        } else if (std.mem.eql(u8, entry.key, "mouse_portal_direction")) {
+            panicf("{s} not implemented", .{entry.key});
+        } else if (std.mem.eql(u8, entry.key, "mouse_portal_offset")) {
+            panicf("{s} not implemented", .{entry.key});
+        } else {
+            panicf("config file '{s}' contains unknown property '{s}'", .{filename, entry.key});
         }
     }
+
     return config;
 }
-
-pub fn SliceFormatter(comptime T: type, comptime spec: []const u8) type { return struct {
-    slice: []const T,
-    pub fn format(
-        self: @This(),
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        var first : bool = true;
-        for (self.slice) |e| {
-            if (first) {
-                first = false;
-            } else {
-                try writer.writeAll(", ");
-            }
-            try std.fmt.format(writer, "{" ++ spec ++ "}", .{e});
-        }
-    }
-};}
-pub fn fmtSliceT(comptime T: type, comptime spec: []const u8, slice: []const T) SliceFormatter(T, spec) {
-    return .{ .slice = slice };
-}
-
 
 fn printPoint(writer: anytype, point: POINT) !void {
     try writer.print("{} x {}", .{point.x, point.y});
@@ -842,16 +806,4 @@ const OptPointFormatter = struct {
 };
 pub fn fmtOptPoint(opt_point: ?POINT) OptPointFormatter {
     return .{ .opt_point = opt_point };
-}
-
-fn jsonObjEnforceKnownFields(map: std.json.ObjectMap, known_fields: []const []const u8, file_for_error: []const u8) !void {
-    var it = map.iterator();
-    fieldLoop: while (it.next()) |kv| {
-        for (known_fields) |known_field| {
-            if (std.mem.eql(u8, known_field, kv.key))
-                continue :fieldLoop;
-        }
-        messageBoxF("{s}: Error: JSON object has unknown field '{s}', expected one of: {}\n", .{file_for_error, kv.key, fmtSliceT([]const u8, "s", known_fields)});
-        return error.AlreadyReported;
-    }
 }
