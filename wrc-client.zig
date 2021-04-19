@@ -16,10 +16,6 @@ usingnamespace win32.api.win_sock;
 const proto = @import("wrc-proto.zig");
 const common = @import("common.zig");
 
-// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-// TODO: make panics work!!
-// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
 // Stuff that is missing from the zigwin32 bindings
 fn LOWORD(val: anytype) u16 { return @intCast(u16, 0xFFFF & val); }
 fn HIWORD(val: anytype) u16 { return LOWORD(val >> 16); }
