@@ -275,15 +275,11 @@ pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace) nore
 }
 pub fn panicf(comptime fmt: []const u8, args: anytype) noreturn {
     var buffer: [500]u8 = undefined;
-    var fixed_buffer_stream = std.io.fixedBufferStream(&buffer);
-    const writer = fixed_buffer_stream.writer();
     const msg: [:0]const u8 = blk: {
-        if (std.fmt.format(writer, fmt, args)) {
-            if (writer.writeByte(0)) {
-                break :blk std.meta.assumeSentinel(@as([]const u8, &buffer), 0);
-            } else |_| { }
-        } else |_| { }
-        break :blk "unabled to format panic message";
+        const len = sformat(&buffer, fmt ++ "\x00", args) catch {
+            break :blk "unable to format panic message";
+        };
+        break :blk std.meta.assumeSentinel(buffer[0..len-1], 0);
     };
     fatalErrorMessageBox(msg, "Windows Remote Control Client");
     std.os.abort();
