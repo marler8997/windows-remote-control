@@ -65,6 +65,7 @@ const Conn = union(enum) {
         screen_size: POINT,
         control_enabled: bool,
         mouse_point: POINT,
+        mouse_wheel: ?i16,
         input: InputState,
     };
 
@@ -111,6 +112,7 @@ const global = struct {
     pub var mouse_msg_hc_noremove: u32 = 0;
     pub var mouse_msg_unknown: u32 = 0;
 
+    pub var local_mouse_wheel: ?i16 = null;
     pub const local_mouse = struct {
         // the last value returned by GetCursorPos in mouseProc
         // this variable is only used for logging/debug
@@ -368,6 +370,7 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
             var remote_state: struct {
                 screen_size: POINT = .{ .x = 0, .y = 0 },
                 mouse_point: POINT = .{ .x = 0, .y = 0 },
+                mouse_wheel: i16 = 0,
                 input: InputState = .{ .mouse_down = [_]?bool { null, null } },
             } = .{};
             const ui_status: []const u8 = blk: { switch (global.conn) {
@@ -378,6 +381,7 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
                     const c = &global.conn.Ready;
                     remote_state.screen_size = c.screen_size;
                     remote_state.mouse_point = c.mouse_point;
+                    remote_state.mouse_wheel = if (c.mouse_wheel) |w| w else 0;
                     remote_state.input = c.input;
                     if (c.control_enabled) {
                         break :blk "controlling";
@@ -388,20 +392,22 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
             render.conn_state.render(hdc, ui_status);
             {
                 var buf: [300]u8 = undefined;
-                const len = sformat(&buf, "LOCAL | screen {} mouse {} (event {}) left={s} right={s}", .{
+                const len = sformat(&buf, "LOCAL | screen {} mouse {} (event {}) left={s} right={s} wheel={}", .{
                     fmtPoint(global.screen_size),
                     fmtOptPoint(global.local_mouse.last_cursor_pos),
                     fmtOptPoint(global.local_mouse.last_event_pos),
                     fmtOptBool(global.local_input.mouse_down[0]), fmtOptBool(global.local_input.mouse_down[1]),
+                    if (global.local_mouse_wheel) |w| w else 0,
                 }) catch @panic("format failed");
                 render.local_info.render(hdc, buf[0..len]);
             }
             {
                 var buf: [300]u8 = undefined;
-                const len = sformat(&buf, "REMOTE| screen {} mouse {} left={s} right={s}", .{
+                const len = sformat(&buf, "REMOTE| screen {} mouse {} left={s} right={s} wheel={}", .{
                     fmtPoint(remote_state.screen_size),
                     fmtOptPoint(remote_state.mouse_point),
                     fmtOptBool(remote_state.input.mouse_down[0]), fmtOptBool(remote_state.input.mouse_down[1]),
+                    remote_state.mouse_wheel,
                 }) catch @panic("format failed");
                 render.remote_info.render(hdc, buf[0..len]);
             }
@@ -510,6 +516,7 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
                     .screen_size = screen_size,
                     .control_enabled = false,
                     .mouse_point = .{ .x = @divTrunc(screen_size.x, 2), .y = @divTrunc(screen_size.y, 2) },
+                    .mouse_wheel = null,
                     .input = .{ .mouse_down = [_]?bool { null, null} },
                 }};
                 global.conn = next_conn;
@@ -547,6 +554,13 @@ fn sendMouseButton(remote: *Conn.Ready, button: u8) void {
         button,
         if (remote.input.mouse_down[button].?) 1 else 0,
     });
+}
+fn sendMouseWheel(remote: *Conn.Ready, delta: i16) void {
+    std.debug.assert(remote.control_enabled);
+    var buf: [3]u8 = undefined;
+    buf[0] = @enumToInt(proto.ClientToServerMsg.mouse_wheel);
+    std.mem.writeIntBig(i16, buf[1..3], delta);
+    globalSockSendFull(remote, &buf);
 }
 fn sendMouseMove(remote: *Conn.Ready, defer_control: enum {allow_defer, no_defer}) void {
     std.debug.assert(remote.control_enabled);
@@ -634,7 +648,7 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
         global.mouse_msg_hc_action += 1;
         invalidateRect();
         if (wParam == WM_MOUSEMOVE) {
-            const data = @intToPtr(*MOUSEHOOKSTRUCT, @bitCast(usize, lParam));
+            const data = @intToPtr(*MSLLHOOKSTRUCT, @bitCast(usize, lParam));
             global.local_mouse.last_event_pos = data.pt;
             global.local_mouse.last_cursor_pos = getCursorPos();
             //log("[DEBUG] mousemove {}", .{fmtPoint(data.pt)});
@@ -717,6 +731,16 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
                 sendMouseButton(remote_ref, proto.mouse_button_right);
             } else {
                 global.local_input.mouse_down[proto.mouse_button_right] = false;
+            }
+        } else if (wParam == WM_MOUSEWHEEL) {
+            const data = @intToPtr(*MSLLHOOKSTRUCT, @bitCast(usize, lParam));
+            const delta = @bitCast(i16, HIWORD(@enumToInt(data.mouseData)));
+            //log("[DEBUG] mousewheel {} (pt={})", .{delta, fmtPoint(data.pt)});
+            if (global.conn.controlEnabled()) |remote_ref| {
+                remote_ref.mouse_wheel = delta;
+                sendMouseWheel(remote_ref, delta);
+            } else {
+                global.local_mouse_wheel = delta;
             }
         } else {
             log("mouseProc: HC_ACTION unknown windows message {}", .{wParam});

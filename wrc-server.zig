@@ -115,7 +115,30 @@ fn processMessage(client: *Client, msg: proto.ClientToServerMsg, data: []const u
                 std.log.err("SendInput failed with {}", .{GetLastError()});
             }
         } else {
-            std.log.info("dropping mouse left down={}, no mouse position", .{down});
+            std.log.info("dropping mouse button {} down={}, no mouse position", .{button, down});
+        }
+    },
+    .mouse_wheel => {
+        std.debug.assert(data.len == 2);
+        const delta = std.mem.readIntBig(i16, data[0..2]);
+        if (client.mouse_point) |mouse_point| {
+            // TODO: this should be const but SendInput arg types is not correct
+            var input = INPUT {
+                .type = .MOUSE,
+                .data = .{ .mi = .{
+                    .dw = mouse_point.x,
+                    .dy = mouse_point.y,
+                    .dwFlags = @enumToInt(win_input.MOUSEEVENTF_WHEEL),
+                    .mouseData = @bitCast(u32, @intCast(i32, delta)),
+                    .time = 0,
+                    .dwExtraInfo = 0,
+                } },
+            };
+            if (1 != win_input.SendInput(1, @ptrCast([*]win_input.INPUT, &input), @sizeOf(INPUT))) {
+                std.log.err("SendInput failed with {}", .{GetLastError()});
+            }
+        } else {
+            std.log.info("dropping mouse wheel {}, no mouse position", .{delta});
         }
     },
     }
@@ -254,6 +277,8 @@ pub fn main() !u8 {
 
 fn main2() !void {
     global.screen_size = common.getScreenSize();
+
+    // call show cursor, I think this will solve an issue where the cursor goes away
 
     if (common.wsaStartup()) |e| {
         std.log.err("WSAStartup failed with {}", .{GetLastError()});

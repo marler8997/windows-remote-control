@@ -12,6 +12,7 @@ Client To Server Messages:
 |-------------|----|------------------|
 | MouseMove   | 1  | `x: i32` `y: i32` |
 | MouseButton | 2 | `button: left=0 right=1` `down: u8` |
+| MouseWheel  | 3 | `delta: i16` (where 120 is one wheel click) |
 
 Server To Client Messages:
 
@@ -22,7 +23,6 @@ After initial connection, the server responds with 8 bytes, the `x` and `y` scre
 * can I hook std.log into wrc-client?
 * improve wrc-client UI to look good
 * find out if we are closing gracefully
-* mouse wheel events
 * keyboard input
 * configuration through the UI
 * have server run in Admin mode to allow it to work when admin processes take the foreground
