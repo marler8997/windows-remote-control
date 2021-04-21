@@ -31,6 +31,13 @@ const INPUT = extern struct {
             time: u32,
             dwExtraInfo: usize,
         },
+        ki: extern struct {
+            wVk: u16,
+            wScan: u16,
+            dwFlags: u32,
+            time: u32,
+            dwExtraInfo: usize,
+        },
     },
 };
 
@@ -139,6 +146,26 @@ fn processMessage(client: *Client, msg: proto.ClientToServerMsg, data: []const u
             }
         } else {
             std.log.info("dropping mouse wheel {}, no mouse position", .{delta});
+        }
+    },
+    .key => {
+        std.debug.assert(data.len == 8);
+        const virt_keycode = std.mem.readIntBig(u16, data[0..2]);
+        const scan_keycode = std.mem.readIntBig(u16, data[2..4]);
+        const flags = std.mem.readIntBig(u32, data[4..8]);
+        // TODO: this should be const but SendInput arg types is not correct
+        var input = INPUT {
+            .type = .KEYBOARD,
+            .data = .{ .ki = .{
+                .wVk = virt_keycode,
+                .wScan = scan_keycode,
+                .dwFlags = flags,
+                .time = 0,
+                .dwExtraInfo = 0,
+            } },
+        };
+        if (1 != win_input.SendInput(1, @ptrCast([*]win_input.INPUT, &input), @sizeOf(INPUT))) {
+            std.log.err("SendInput failed with {}", .{GetLastError()});
         }
     },
     }

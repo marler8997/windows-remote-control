@@ -113,6 +113,7 @@ const global = struct {
     var logfile: std.fs.File = undefined;
     var config: Config = Config.default();
     var mouse_hook: ?HHOOK = null;
+    var keyboard_hook: ?HHOOK = null;
     var hwnd: HWND = undefined;
     var window_msg_counter: u8 = 0;
     var screen_size: POINT = undefined;
@@ -201,7 +202,10 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) !void {
     // add global mouse hook
     global.mouse_hook = SetWindowsHookExA(WH_MOUSE_LL, mouseProc, hInstance, 0);
     if (global.mouse_hook == null)
-        panicf("SetWindowsHookExA failed, error={}", .{GetLastError()});
+        panicf("SetWindowsHookExA with WH_MOUSE_LL failed, error={}", .{GetLastError()});
+    global.keyboard_hook = SetWindowsHookExA(WH_KEYBOARD_LL, keyboardProc, hInstance, 0);
+    if (global.keyboard_hook == null)
+        panicf("SetWindowsHookExA with WH_KEYBOARD_LL failed, error={}", .{GetLastError()});
 
     {
         const wc = WNDCLASSEX {
@@ -274,6 +278,7 @@ fn fatalErrorMessageBox(msg: [:0]const u8, caption: [:0]const u8) void {
     // otherwise the messagebox message pipe will handle mouse proc events and
     // it messes up Windows
     if (global.mouse_hook) |h| _ = UnhookWindowsHookEx(h);
+    if (global.keyboard_hook) |h| _ = UnhookWindowsHookEx(h);
     _ = MessageBoxA(null, msg, caption, .OK);
 }
 
@@ -612,6 +617,15 @@ fn sendMouseMove(remote: *Conn.Ready, defer_control: enum {allow_defer, no_defer
     //log("mouse move {}", .{fmtPoint(remote.point)});
     globalSockSendFull(remote, &buf);
 }
+fn sendKey(remote: *Conn.Ready, vk: u16, scan: u16, flags: u32) void {
+    std.debug.assert(remote.control_enabled);
+    var buf: [9]u8 = undefined;
+    buf[0] = @enumToInt(proto.ClientToServerMsg.key);
+    std.mem.writeIntBig(u16, buf[1..3], vk);
+    std.mem.writeIntBig(u16, buf[3..5], scan);
+    std.mem.writeIntBig(u32, buf[5..9], flags);
+    globalSockSendFull(remote, &buf);
+}
 
 fn portalShift(pos: i32, local_size: i32, remote_size: i32) i32 {
     if (local_size == remote_size) {
@@ -657,7 +671,10 @@ fn portalRemoteToLocal(remote: *Conn.Ready, point: POINT) ?POINT {
 fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT {
     if (code < 0) {
         global.mouse_msg_forward += 1;
-    } else if (code == HC_ACTION) {
+        return CallNextHookEx(null, code, wParam, lParam);
+    }
+
+    if (code == HC_ACTION) {
         global.mouse_msg_hc_action += 1;
         invalidateRect();
         if (wParam == WM_MOUSEMOVE) {
@@ -771,6 +788,46 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
         return 1;
     }
     return CallNextHookEx(null, code, wParam, lParam);
+}
+fn keyboardProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT {
+    if (code < 0) {
+        return CallNextHookEx(null, code, wParam, lParam);
+    }
+    if (code != HC_ACTION) {
+        log("WARNING: unknown WM_KEYBOARD_LL code {}", .{code});
+        return CallNextHookEx(null, code, wParam, lParam);
+    }
+    const KeyMsg = enum { keydown, keyup, syskeydown, syskeyup };
+    const key_msg: KeyMsg = switch (wParam) {
+        WM_KEYDOWN => .keydown,
+        WM_KEYUP => .keyup,
+        WM_SYSKEYDOWN => .syskeydown,
+        WM_SYSKEYUP => .syskeyup,
+        else => {
+            log("WARNING: keyboardProc unknown msg {}", .{wParam});
+            return CallNextHookEx(null, code, wParam, lParam);
+        },
+    };
+    const down = switch (key_msg) {
+        .keydown => true, .keyup => false, .syskeydown => true, .syskeyup => false,
+    };
+
+    const data = @intToPtr(*KBDLLHOOKSTRUCT, @bitCast(usize, lParam));
+    const input_flags: u32 = if (down) 0 else @enumToInt(KEYEVENTF_KEYUP);
+    //log("[DEBUG] keyboardProc code={} wParam={}({}) vk={} scan={} flags=0x{x}", .{
+    //    code, key_msg, wParam, data.vkCode, data.scanCode, input_flags});
+    if (global.conn.controlEnabled()) |remote_ref| {
+        if (data.vkCode > std.math.maxInt(u16)) {
+            log("WARNING: vkCode {} is too big (max is {})", .{data.vkCode, std.math.maxInt(u16)});
+        } else if (data.scanCode > std.math.maxInt(u16)) {
+            log("WARNING: scanCode {} is too big (max is {})", .{data.scanCode, std.math.maxInt(u16)});
+        } else {
+            sendKey(remote_ref, @intCast(u16, data.vkCode), @intCast(u16, data.scanCode), input_flags);
+        }
+        return 1; // do not forward the event
+    } else {
+        return CallNextHookEx(null, code, wParam, lParam);
+    }
 }
 
 fn hideMouseCursor(ready: *Conn.Ready) void {

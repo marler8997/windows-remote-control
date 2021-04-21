@@ -13,6 +13,7 @@ Client To Server Messages:
 | MouseMove   | 1  | `x: i32` `y: i32` |
 | MouseButton | 2 | `button: left=0 right=1` `down: u8` |
 | MouseWheel  | 3 | `delta: i16` (where 120 is one wheel click) |
+| Key         | 4 | `virt_keycode: u16` `scan_keycode: u16` `flags: u32` See https://docs.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-keybdinput for explanation of these values. |
 
 Server To Client Messages:
 
@@ -26,7 +27,6 @@ After initial connection, the server responds with 8 bytes, the `x` and `y` scre
 * middle mouse button
 * mouse portal scaling/offset
 * find out if we are closing gracefully
-* keyboard input
 * configuration through the UI
 * have server run in Admin mode to allow it to work when admin processes take the foreground
 * keep remote machine awake?
