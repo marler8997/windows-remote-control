@@ -61,6 +61,24 @@ pub fn tryRecv(s: SOCKET, buf: []u8) !usize {
     return @intCast(usize, len);
 }
 
+pub fn tryRecvFrom(s: SOCKET, buf: []u8, addr: *std.net.Address) !usize {
+    // TODO: the data type for recv is not correct, it does not require null-termination
+    var fromlen: i32 = @sizeOf(@TypeOf(addr.*));
+    const len = recvfrom(s, @ptrCast([*:0]u8, buf), @intCast(i32, buf.len), 0,
+        @ptrCast(*SOCKADDR, addr), &fromlen);
+    if (len <= 0) {
+        if (len == 0) {
+            return error.SocketShutdown;
+        }
+        const err = WSAGetLastError();
+        if (err == WSAECONNRESET) {
+            return error.SocketShutdown;
+        }
+        return error.RecvFailed;
+    }
+    return @intCast(usize, len);
+}
+
 pub fn getScreenSize() POINT {
     std.debug.assert(0 == GetSystemMetrics(SM_XVIRTUALSCREEN));
     std.debug.assert(0 == GetSystemMetrics(SM_YVIRTUALSCREEN));

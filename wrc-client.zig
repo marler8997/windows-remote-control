@@ -908,7 +908,8 @@ fn startConnect2(addr: *const std.net.Ip4Address, s: SOCKET) !void {
 // Success if global.conn.sock != INVALID_SOCKET
 fn startConnect(addr: *const std.net.Ip4Address) void {
     switch (global.conn) { .None => {}, else => @panic("codebug") }
-    const s = socket(std.os.AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    //const s = socket(std.os.AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    const s = socket(std.os.AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s == INVALID_SOCKET) {
         panicf("socket function failed, error={}", .{GetLastError()});
         //return; // fail because global.conn.sock is still INVALID_SOCKET
@@ -918,6 +919,11 @@ fn startConnect(addr: *const std.net.Ip4Address) void {
     } else |_| {
         if (0 != closesocket(s)) unreachable; // fail because global.conn.sock is stil INVALID_SOCKET
     }
+    std.debug.assert(0 != PostMessage(global.hwnd, WM_USER_SOCKET, 0, FD_CONNECT));
+    common.sendFull(global.conn.Connecting.sock, &[_]u8{1, 0, 0, 0, 0, 0, 0, 0, 0}) catch {
+        global.conn.closeSocketAndReset();
+        invalidateRect();
+    };
 }
 
 fn loadConfig(allocator: *std.mem.Allocator, filename: []const u8, config_file: std.fs.File) !Config {

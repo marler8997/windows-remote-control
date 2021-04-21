@@ -193,14 +193,16 @@ fn processClientData(client: *Client, data: []const u8) ?usize {
     }
 }
 
+
+var connected = false;
 fn handleClientSock(client: *Client) void {
     var buffer_storage: [1024]u8 = undefined;
     const buffer: []u8 = &buffer_storage;
 
     @memcpy(buffer.ptr, &client.leftover, client.leftover_len);
 
-    // TODO: the data type for recv is not correct
-    const len = common.tryRecv(client.sock, buffer[client.leftover_len..]) catch |e| {
+    var from: std.net.Address = undefined;
+    const len = common.tryRecvFrom(client.sock, buffer[client.leftover_len..], &from) catch |e| {
         switch (e) {
             error.SocketShutdown => std.log.info("client closed connection", .{}),
             error.RecvFailed => std.log.info("recv function failed with {}", .{GetLastError()}),
@@ -209,7 +211,22 @@ fn handleClientSock(client: *Client) void {
         client.sock = INVALID_SOCKET;
         return;
     };
-    //std.log.info("[DEBUG] got {} bytes", .{len});
+    //std.log.info("[DEBUG] got {} bytes from {}", .{len, from});
+    std.debug.assert(0 == connect(client.sock, @ptrCast(*SOCKADDR, &from), @intCast(i32, from.getOsSockLen())));
+    if (!connected) {
+        var msg: [8]u8 = undefined;
+        std.mem.writeIntBig(i32, msg[0..4], global.screen_size.x);
+        std.mem.writeIntBig(i32, msg[4..8], global.screen_size.y);
+        common.sendFull(client.sock, &msg) catch {
+            std.log.err("failed to send screen size to client, error={}", .{GetLastError()});
+            _ = shutdown(client.sock, SD_BOTH);
+            if (closesocket(client.sock) != 0) unreachable;
+            @panic("here");
+        };
+        // TODO: set socket to nonblocking??
+        connected = true;
+    }
+
     const total = client.leftover_len + len;
     const processed = processClientData(client, buffer[0..total]) orelse {
         // error already logged
@@ -260,6 +277,7 @@ fn FD_ISSET(s: SOCKET, set: *const fd_set) bool {
 
 fn serveLoop(listen_sock: SOCKET) !void {
     var client = Client.initInvalid();
+    client.setSock(listen_sock);
 
     while (true) {
         var read_set: fd_set = undefined;
@@ -317,7 +335,7 @@ fn main2() !void {
         std.log.err("invalid ip address '{s}': {}", .{addr_string, e});
         return error.AlreadyReported;
     };
-    const s = socket(addr.any.family, SOCK_STREAM, IPPROTO_TCP);
+    const s = socket(addr.any.family, SOCK_DGRAM, IPPROTO_UDP);
     if (s == INVALID_SOCKET) {
         std.log.err("socket function failed with {}", .{GetLastError()});
         return error.AlreadyReported;
@@ -327,10 +345,10 @@ fn main2() !void {
         std.log.err("bind to {} failed: {}", .{addr, e});
         return error.AlreadyReported;
     };
-    std.os.listen(asZigSock(s), 0) catch |e| {
-        std.log.err("listen failed: {}", .{e});
-        return error.AlreadyReported;
-    };
+    //std.os.listen(asZigSock(s), 0) catch |e| {
+    //    std.log.err("listen failed: {}", .{e});
+    //    return error.AlreadyReported;
+    //};
     common.setNonBlocking(s) catch |_| {
         std.log.err("ioctlsocket function to set non-blocking failed with {}", .{GetLastError()});
         return error.AlreadyReported;
