@@ -37,8 +37,8 @@ pub fn setBlocking(s: SOCKET) !void {
 pub fn sendFull(s: SOCKET, buf: []const u8) !void {
     var total: usize = 0;
     while (total < buf.len) {
-        // NOTE: the data type for send is not correct
-        const sent = send(s, @ptrCast(*const i8, buf.ptr + total), @intCast(i32, buf.len - total), @intToEnum(send_flags, 0));
+        // TODO: the data type for send is not correct, it does not require null-termination
+        const sent = send(s, @ptrCast([*:0]const u8, buf.ptr + total), @intCast(i32, buf.len - total), @intToEnum(SEND_FLAGS, 0));
         if (sent <= 0)
             return error.SocketSendFailed;
         total += @intCast(usize, sent);
@@ -46,13 +46,13 @@ pub fn sendFull(s: SOCKET, buf: []const u8) !void {
 }
 
 pub fn tryRecv(s: SOCKET, buf: []u8) !usize {
-    // TODO: the data type for recv is not correct
-    const len = recv(s, @ptrCast(*i8, buf), @intCast(i32, buf.len), 0);
+    // TODO: the data type for recv is not correct, it does not require null-termination
+    const len = recv(s, @ptrCast([*:0]u8, buf), @intCast(i32, buf.len), 0);
     if (len <= 0) {
         if (len == 0) {
             return error.SocketShutdown;
         }
-        const err = GetLastError();
+        const err = WSAGetLastError();
         if (err == WSAECONNRESET) {
             return error.SocketShutdown;
         }

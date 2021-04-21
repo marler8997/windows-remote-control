@@ -21,7 +21,7 @@ const INVALID_SOCKET = ~@as(usize, 0);
 // NOTE: INPUT does not generate correctly yet because unions are implemented in zigwin32 yet
 const win_input = win32.api.keyboard_and_mouse_input;
 const INPUT = extern struct {
-    type: win_input.INPUT_typeFlags,
+    type: win_input.INPUT_TYPE,
     data: extern union {
         mi: extern struct {
             dw: i32,
