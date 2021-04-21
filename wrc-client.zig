@@ -12,6 +12,7 @@ usingnamespace win32.api.windows_and_messaging;
 usingnamespace win32.api.gdi;
 usingnamespace win32.api.display_devices;
 usingnamespace win32.api.win_sock;
+usingnamespace win32.api.keyboard_and_mouse_input;
 
 const proto = @import("wrc-proto.zig");
 const common = @import("common.zig");
@@ -67,11 +68,20 @@ const Conn = union(enum) {
         mouse_point: POINT,
         mouse_wheel: ?i16,
         input: InputState,
+        hide_cursor_count: u31,
     };
 
     pub fn closeSocketAndReset(self: *Conn) void {
         if (self.getSocket()) |s| {
             if (closesocket(s) != 0) unreachable;
+        }
+        switch (self.*) {
+            .Ready => {
+                if (self.Ready.hide_cursor_count > 0) {
+                    restoreMouseCursor(&self.Ready);
+                }
+            },
+            else => {},
         }
         self.* = Conn.None;
     }
@@ -141,6 +151,7 @@ fn getCursorPos() POINT {
         panicf("GetCursorPos failed, error={}", .{GetLastError()});
     return mouse_point;
 }
+
 
 pub export fn wWinMain(hInstance: HINSTANCE, removeme: HINSTANCE, pCmdLine: [*:0]u16, nCmdShow: c_int) callconv(WINAPI) c_int {
     main2(hInstance, @intCast(u32, nCmdShow)) catch |e| panicf("fatal error {}", .{e});
@@ -440,9 +451,11 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
             if (wParam == VK_ESCAPE) {
                 if (global.conn.isReady()) |ready_ref| {
                     if (ready_ref.control_enabled) {
+                        restoreMouseCursor(ready_ref);
                         ready_ref.control_enabled = false;
                     } else {
                         ready_ref.control_enabled = true;
+                        hideMouseCursor(ready_ref);
                     }
                 } else {
                     log("ignoring ESC because connection is not ready", .{});
@@ -518,6 +531,7 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
                     .mouse_point = .{ .x = @divTrunc(screen_size.x, 2), .y = @divTrunc(screen_size.y, 2) },
                     .mouse_wheel = null,
                     .input = .{ .mouse_down = [_]?bool { null, null} },
+                    .hide_cursor_count = 0,
                 }};
                 global.conn = next_conn;
             } else {
@@ -542,7 +556,6 @@ fn globalSockSendFull(remote: *Conn.Ready, buf: []const u8) void {
     std.debug.assert(remote.control_enabled);
     common.sendFull(remote.sock, buf) catch {
         global.conn.closeSocketAndReset();
-        //remote.closeSocketAndReset();
         invalidateRect();
     };
 }
@@ -663,6 +676,7 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
                 };
 
                 if (portalRemoteToLocal(remote_ref, next_remote_mouse_point)) |local_point| {
+                    restoreMouseCursor(remote_ref);
                     remote_ref.control_enabled = false;
                     //log("transport local mouse from {} to {}", .{global.local_mouse_point, local_point});
                     // NOTE: changing the current event and fowarding it doesn't seem to work
@@ -699,6 +713,7 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
                     if (portalLocalToRemote(ready_ref, data.pt)) |remote_point| {
                         ready_ref.mouse_point = remote_point;
                         ready_ref.control_enabled = true;
+                        hideMouseCursor(ready_ref);
                     }
                 } else {
                     // TODO: log if we are in the portal and connection is not ready?
@@ -756,6 +771,55 @@ fn mouseProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT
         return 1;
     }
     return CallNextHookEx(null, code, wParam, lParam);
+}
+
+fn hideMouseCursor(ready: *Conn.Ready) void {
+    std.debug.assert(ready.hide_cursor_count == 0);
+
+    {
+        var result = ShowCursor(FALSE);
+        ready.hide_cursor_count += 1;
+        while (result >= 0) {
+            const next = ShowCursor(FALSE);
+            ready.hide_cursor_count += 1;
+            std.debug.assert(next == result - 1);
+            result = next;
+        }
+    }
+
+    // NOTE:
+    // On Windows you can only hide the cursor if it's on your window and your window is
+    // in the foreground.  So for now this code moves the cursor to my window so I can hide it.
+    // This stil has a problem because Windows quickly shows the mouse move sometimes.  Also,
+    // it requires keeping my window in the foreground.
+
+    // Another idea would be to create a transparent 1 pixel window somewhere and moving the mouse
+    // to that window.  However, I think this would still have the problem of showing the mouse move.
+    // Yet another idea would be to put a transparent 1 pixel wide border at the mouse portal border
+    // and move the cursor into that window during remote control.  The mouse would only need to move a few
+    // pixels at most which likely wouldn't be noticed.
+
+    // move cursor to the middle of my window so I can hide it
+    {
+        var window_rect: RECT = undefined;
+        std.debug.assert(0 != GetWindowRect(global.hwnd, &window_rect));
+        var cursor_pos = POINT {
+            .x = window_rect.left + @divTrunc(window_rect.right - window_rect.left, 2),
+            .y = window_rect.top + @divTrunc(window_rect.bottom - window_rect.top, 2),
+        };
+        std.debug.assert(0 != SetCursorPos(cursor_pos.x, cursor_pos.y));
+    }
+}
+
+fn restoreMouseCursor(ready: *Conn.Ready) void {
+    var result = ShowCursor(TRUE);
+    std.debug.assert(result == 0);
+    ready.hide_cursor_count -= 1;
+    while (ready.hide_cursor_count != 0) {
+        result += 1;
+        std.debug.assert(result == ShowCursor(TRUE));
+        ready.hide_cursor_count -= 1;
+    }
 }
 
 
