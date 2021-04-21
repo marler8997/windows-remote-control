@@ -24,6 +24,7 @@ After initial connection, the server responds with 8 bytes, the `x` and `y` scre
 * improve wrc-client UI to look good
 * hide local mouse when remote controlling?
 * middle mouse button
+* mouse portal scaling/offset
 * find out if we are closing gracefully
 * keyboard input
 * configuration through the UI
