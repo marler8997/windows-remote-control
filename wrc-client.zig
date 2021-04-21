@@ -217,7 +217,7 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) !void {
         _T("Windows Remote Control Client"),
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        800, 200,
+        850, 200,
         null,
         null,
         hInstance,
