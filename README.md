@@ -21,6 +21,7 @@ After initial connection, the server responds with 8 bytes, the `x` and `y` scre
 
 # TODO:
 
+* add "reconnect" button
 * can I hook std.log into wrc-client?
 * improve wrc-client UI to look good
 * hide local mouse when remote controlling?
