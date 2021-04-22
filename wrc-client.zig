@@ -913,6 +913,11 @@ fn startConnect(addr: *const std.net.Ip4Address) void {
         panicf("socket function failed, error={}", .{GetLastError()});
         //return; // fail because global.conn.sock is still INVALID_SOCKET
     }
+    {
+        var nodelay: u8 = 1;
+        if (0 != setsockopt(s, IPPROTO_TCP, TCP_NODELAY, @ptrCast([*:0]u8, &nodelay), @sizeOf(@TypeOf(nodelay))))
+            panicf("failed to set tcp nodelay, error={}", .{WSAGetLastError()});
+    }
     if (startConnect2(addr, s)) {
         global.conn = .{ .Connecting = .{ .sock = s } }; // success
     } else |_| {
