@@ -29,6 +29,7 @@ After initial connection, the server responds with 8 bytes, the `x` and `y` scre
 * mouse portal scaling/offset
 * find out if we are closing gracefully
 * configuration through the UI
+* add copy/paste support?
 * have server run in Admin mode to allow it to work when admin processes take the foreground
 * keep remote machine awake?
 * when my laptop wakes up, the cursor is not visible until I touch the trackpad.  I'm not sure if this can be solved, I think I'll need to keep the remote machine from going to sleep while it's connected.
