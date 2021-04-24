@@ -259,11 +259,29 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) !void {
     _ = ShowWindow(global.hwnd, @intToEnum(SHOW_WINDOW_CMD, nCmdShow));
     _ = UpdateWindow(global.hwnd);
 
-    {
-        var msg : MSG = undefined;
-        while (GetMessage(&msg, null, 0, 0) != 0) {
+
+    const handles: []HANDLE = &[_]HANDLE {};
+    while (true) {
+        const result = MsgWaitForMultipleObjects(
+            handles.len, handles.ptr, FALSE,
+            win32.api.windows_programming.INFINITE,
+            QS_ALLINPUT);
+        if (result == @enumToInt(WAIT_OBJECT_0) + handles.len) {
+            // TODO: should I use a PeekMessage loop here instead?
+            //       this would add complexity so I should onl do so
+            //       if I measure a performance benefit
+            var msg: MSG = undefined;
+            if (0 == GetMessage(&msg, null, 0, 0)) {
+                break;
+            }
             _ = TranslateMessage(&msg);
             _ = DispatchMessage(&msg);
+        } else if (result == @enumToInt(WAIT_FAILED)) {
+            panicf("MsgWaitForMultipleObjects failed, error={}", .{GetLastError()});
+        } else if (result == @enumToInt(WAIT_TIMEOUT)) {
+            panicf("MsgWaitForMultipleObjects unexpectedly returned timeout", .{});
+        } else {
+            panicf("MsgWaitForMultipleObjects returned unexpected value {}", .{result});
         }
     }
 }
