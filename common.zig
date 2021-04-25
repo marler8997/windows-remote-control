@@ -6,6 +6,11 @@ usingnamespace win32.api.display_devices;
 usingnamespace win32.api.windows_and_messaging;
 usingnamespace win32.api.win_sock;
 
+const proto = @import("wrc-proto.zig");
+
+// Stuff that is missing from the zigwin32 bindings
+const INVALID_SOCKET = ~@as(usize, 0);
+
 // NOTE: this should be in win32, maybe in win32.zig?
 fn MAKEWORD(low: u8, high: u8) u16 {
     return @intCast(u16, low) | (@intCast(u16, high) << 8);
@@ -34,6 +39,37 @@ pub fn setBlocking(s: SOCKET) !void {
     return try setBlockingMode(s, 0);
 }
 
+pub fn createBroadcastSocket() !SOCKET {
+    const s = try std.os.socket(std.os.AF_INET, SOCK_DGRAM | std.os.SOCK_NONBLOCK, IPPROTO_UDP);
+    errdefer std.os.closeSocket(s);
+
+    {
+        const reuse = &[_]u8 {1};
+        try std.os.setsockopt(s, SOL_SOCKET, SO_REUSEADDR, reuse);
+    }
+    {
+        const broadcast = &[_]u8 {1};
+        try std.os.setsockopt(s, SOL_SOCKET, SO_BROADCAST, broadcast);
+    }
+
+    {
+        const addr = std.net.Address.parseIp4("0.0.0.0", proto.broadcast_port) catch unreachable;
+        try std.os.bind(s, @ptrCast(*const std.os.sockaddr, &addr), addr.getOsSockLen());
+    }
+    return @ptrToInt(s);
+}
+
+pub fn broadcastMyself(s: SOCKET) !void {
+    const msg = &[_]u8 { 0 };
+    // TODO: send to both 255.255.255.255 AND also all the
+    //       subnet broadcast addresses!
+    //       If I do this, provide a UI that shows all the addresses
+    //       we are broadcasting on
+    const send_addr = std.net.Address.parseIp4("255.255.255.255", proto.broadcast_port) catch unreachable;
+    const sent = try std.os.sendto(@intToPtr(std.os.socket_t, s), msg, 0, &send_addr.any, send_addr.getOsSockLen());
+    std.debug.assert(sent == msg.len);
+}
+
 pub fn sendFull(s: SOCKET, buf: []const u8) !void {
     var total: usize = 0;
     while (total < buf.len) {
@@ -45,9 +81,21 @@ pub fn sendFull(s: SOCKET, buf: []const u8) !void {
     }
 }
 
-pub fn tryRecv(s: SOCKET, buf: []u8) !usize {
+pub fn recvFrom(s: SOCKET, buf: []u8, from: *std.net.Address) i32 {
+    // TODO: the data type for recvfrom is not correct, it does not require null-termination
+    var fromlen: i32 = @sizeOf(@TypeOf(from.*));
+    return recvfrom(s, @ptrCast([*:0]u8, buf.ptr), @intCast(i32, buf.len),
+        0, @ptrCast(*SOCKADDR, from), &fromlen);
+}
+
+pub fn recvSlice(s: SOCKET, buf: []u8) i32 {
     // TODO: the data type for recv is not correct, it does not require null-termination
-    const len = recv(s, @ptrCast([*:0]u8, buf), @intCast(i32, buf.len), 0);
+    return recv(s, @ptrCast([*:0]u8, buf.ptr), @intCast(i32, buf.len), 0);
+}
+
+
+pub fn tryRecv(s: SOCKET, buf: []u8) !usize {
+    const len = recvSlice(s, buf);
     if (len <= 0) {
         if (len == 0) {
             return error.SocketShutdown;

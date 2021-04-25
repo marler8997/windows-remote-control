@@ -21,6 +21,7 @@ After initial connection, the server responds with 8 bytes, the `x` and `y` scre
 
 # TODO:
 
+* broadcast udp on all adapaters
 * replace WSAAsyncSelect
 * add "reconnect" button
 * can I hook std.log into wrc-client?

@@ -1,3 +1,6 @@
+pub const broadcast_port = 24807;
+pub const max_udp_msg = 30;
+
 pub const ClientToServerMsg = enum(u8) {
     mouse_move = 1,
     mouse_button = 2,

@@ -25,8 +25,9 @@ const INVALID_SOCKET = ~@as(usize, 0);
 const WSAGETSELECTEVENT = LOWORD;
 const WSAGETSELECTERROR = HIWORD;
 
-const WM_USER_SOCKET = WM_USER + 1;
-const WM_USER_DEFERRED_MOUSE_MOVE = WM_USER + 2;
+const WM_USER_RC_SOCKET = WM_USER + 1;
+const WM_USER_UDP_SOCKET = WM_USER + 2;
+const WM_USER_DEFERRED_MOUSE_MOVE = WM_USER + 3;
 
 const Direction = enum { left, top, right, bottom };
 const Config = struct {
@@ -117,6 +118,7 @@ const global = struct {
     var hwnd: HWND = undefined;
     var window_msg_counter: u8 = 0;
     var screen_size: POINT = undefined;
+    var udp_sock: ?SOCKET = null;
 
     pub var mouse_msg_forward: u32 = 0;
     pub var mouse_msg_hc_action: u32 = 0;
@@ -253,6 +255,16 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) !void {
             .Connecting => {},
             else => return error.AlreadyReported,
         }
+    }
+
+    const broadcast_enabled = true;
+    if (broadcast_enabled) {
+        global.udp_sock = common.createBroadcastSocket() catch |e|
+            panicf("failed to create udp broadcast socket: {}", .{e});
+        if (0 != WSAAsyncSelect(global.udp_sock.?, global.hwnd, WM_USER_UDP_SOCKET, FD_READ)) {
+            panicf("WSAAsyncSelect on broadcast udp failed, error={}", .{WSAGetLastError()});
+        }
+        try common.broadcastMyself(global.udp_sock.?);
     }
 
     // TODO: check for errors?
@@ -487,7 +499,7 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
             invalidateRect();
             return 0;
         },
-        WM_USER_SOCKET => {
+        WM_USER_RC_SOCKET => {
             const event = WSAGETSELECTEVENT(lParam);
             if (event == FD_CLOSE) {
                 log("socket closed", .{});
@@ -562,6 +574,20 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
                    FD_CLOSE, FD_CONNECT, event});
                 PostQuitMessage(1);
             }
+            return 0;
+        },
+        WM_USER_UDP_SOCKET => {
+            const event = WSAGETSELECTEVENT(lParam);
+            if (event != FD_READ)
+                panicf("unexpected udp socket event {}", .{event});
+            var from: std.net.Address = undefined;
+            var buf: [proto.max_udp_msg]u8 = undefined;
+            const len = common.recvFrom(wParam, &buf, &from);
+            if (len <= 0) {
+                log("recv on udp socket returned {}, error={}", .{len, GetLastError()});
+                panicf("TODO: implement udp socket re-initialization?", .{});
+            }
+            log("got {}-byte udp msg from {}", .{len, from});
             return 0;
         },
         WM_DESTROY => {
@@ -897,6 +923,30 @@ fn restoreMouseCursor(ready: *Conn.Ready) void {
     }
 }
 
+fn createBroadcastSocket() error{AlreadyReported}!void {
+    std.debug.assert(global.udp_sock == null);
+    const s = socket(std.os.AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == INVALID_SOCKET) {
+        panicf("failed to create broadcast udp socket, error={}", .{GetLastError()});
+    }
+    errdefer {
+        if (0 != closesocket(s)) unreachable;
+    }
+
+    {
+        const addr = std.net.Address.parseIp4("0.0.0.0", proto.broadcast_port) catch unreachable;
+        if (0 != bind(s, @ptrCast(*const SOCKADDR, &addr), @sizeOf(@TypeOf(addr)))) {
+            panicf("failed to bind broadcast udp socket to {}, error={}", .{addr, GetLastError()});
+        }
+    }
+    common.setNonBlocking(s) catch |_| {
+        panicf("failed to set broadcast udp socket to non-blocking, error={}", .{GetLastError()});
+    };
+    if (0 != WSAAsyncSelect(s, global.hwnd, WM_USER_UDP_SOCKET, FD_READ)) {
+        panicf("WSAAsyncSelect on broadcast udp failed, error={}", .{WSAGetLastError()});
+    }
+    global.udp_sock = s;
+}
 
 fn startConnect2(addr: *const std.net.Ip4Address, s: SOCKET) !void {
     common.setNonBlocking(s) catch |_| {
@@ -907,7 +957,7 @@ fn startConnect2(addr: *const std.net.Ip4Address, s: SOCKET) !void {
     // I've moved the WSAAsyncSelect call to come before calling connect, this
     // seems to solve some sort of race condition where the connect message will
     // get dropped.
-    if (0 != WSAAsyncSelect(s, global.hwnd, WM_USER_SOCKET, FD_CLOSE | FD_CONNECT| FD_READ)) {
+    if (0 != WSAAsyncSelect(s, global.hwnd, WM_USER_RC_SOCKET, FD_CLOSE | FD_CONNECT| FD_READ)) {
         panicf("WSAAsyncSelect failed, error={}", .{WSAGetLastError()});
         //return error.ConnnectFail;
     }
