@@ -1,9 +1,9 @@
 const std = @import("std");
 
 const win32 = @import("win32");
-usingnamespace win32.api.display_devices;
-usingnamespace win32.api.gdi;
-usingnamespace win32.api.windows_and_messaging;
+usingnamespace win32.ui.display_devices;
+usingnamespace win32.graphics.gdi;
+usingnamespace win32.ui.windows_and_messaging;
 
 pub fn sformat(buf: []u8, comptime fmt: []const u8, args: anytype) !usize {
     var fixed_buffer_stream = std.io.fixedBufferStream(buf);

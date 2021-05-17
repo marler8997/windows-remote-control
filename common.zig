@@ -1,10 +1,10 @@
 const std = @import("std");
 const win32 = @import("win32");
-usingnamespace win32.api.system_services;
-usingnamespace win32.api.debug;
-usingnamespace win32.api.display_devices;
-usingnamespace win32.api.windows_and_messaging;
-usingnamespace win32.api.win_sock;
+usingnamespace win32.system.system_services;
+usingnamespace win32.system.diagnostics.debug;
+usingnamespace win32.ui.display_devices;
+usingnamespace win32.ui.windows_and_messaging;
+usingnamespace win32.networking.win_sock;
 
 const proto = @import("wrc-proto.zig");
 
@@ -22,8 +22,6 @@ pub fn wsaStartup() ?c_int {
     return if (result == 0) null else result;
 }
 
-// NOTE: win32metadata doesn't use a SOCKET type?
-const SOCKET = usize;
 // TODO: why is this not defined in zigwin32?
 const FIONBIO: i32 = -2147195266;
 
@@ -40,7 +38,7 @@ pub fn setBlocking(s: SOCKET) !void {
 }
 
 pub fn createBroadcastSocket() !SOCKET {
-    const s = try std.os.socket(std.os.AF_INET, SOCK_DGRAM | std.os.SOCK_NONBLOCK, IPPROTO_UDP);
+    const s = try std.os.socket(std.os.AF_INET, SOCK_DGRAM | std.os.SOCK_NONBLOCK, @enumToInt(IPPROTO.UDP));
     errdefer std.os.closeSocket(s);
 
     {

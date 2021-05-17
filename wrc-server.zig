@@ -6,20 +6,19 @@ const WINAPI = std.os.windows.WINAPI;
 
 const win32 = @import("win32");
 usingnamespace win32.zig;
-usingnamespace win32.api.debug;
-usingnamespace win32.api.system_services;
-usingnamespace win32.api.windows_and_messaging;
-usingnamespace win32.api.win_sock;
-usingnamespace win32.api.display_devices;
+usingnamespace win32.system.diagnostics.debug;
+usingnamespace win32.system.system_services;
+usingnamespace win32.ui.windows_and_messaging;
+usingnamespace win32.networking.win_sock;
+usingnamespace win32.ui.display_devices;
 
 const proto = @import("wrc-proto.zig");
 const common = @import("common.zig");
 
 // Stuff that is missing from the zigwin32 bindings
-const SOCKET = usize;
 const INVALID_SOCKET = ~@as(usize, 0);
 // NOTE: INPUT does not generate correctly yet because unions are implemented in zigwin32 yet
-const win_input = win32.api.keyboard_and_mouse_input;
+const win_input = win32.ui.keyboard_and_mouse_input;
 const INPUT = extern struct {
     type: win_input.INPUT_TYPE,
     data: extern union {
@@ -317,7 +316,7 @@ fn main2() !void {
         std.log.err("invalid ip address '{s}': {}", .{addr_string, e});
         return error.AlreadyReported;
     };
-    const s = socket(addr.any.family, SOCK_STREAM, IPPROTO_TCP);
+    const s = socket(addr.any.family, SOCK_STREAM, @enumToInt(IPPROTO.TCP));
     if (s == INVALID_SOCKET) {
         std.log.err("socket function failed with {}", .{GetLastError()});
         return error.AlreadyReported;

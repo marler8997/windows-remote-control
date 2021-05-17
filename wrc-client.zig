@@ -6,13 +6,14 @@ const WINAPI = std.os.windows.WINAPI;
 
 const win32 = @import("win32");
 usingnamespace win32.zig;
-usingnamespace win32.api.debug;
-usingnamespace win32.api.system_services;
-usingnamespace win32.api.windows_and_messaging;
-usingnamespace win32.api.gdi;
-usingnamespace win32.api.display_devices;
-usingnamespace win32.api.win_sock;
-usingnamespace win32.api.keyboard_and_mouse_input;
+usingnamespace win32.system.diagnostics.debug;
+usingnamespace win32.system.system_services;
+usingnamespace win32.ui.windows_and_messaging;
+usingnamespace win32.graphics.gdi;
+usingnamespace win32.ui.display_devices;
+usingnamespace win32.networking.win_sock;
+usingnamespace win32.ui.keyboard_and_mouse_input;
+usingnamespace win32.system.threading;
 
 const proto = @import("wrc-proto.zig");
 const common = @import("common.zig");
@@ -20,7 +21,6 @@ const common = @import("common.zig");
 // Stuff that is missing from the zigwin32 bindings
 fn LOWORD(val: anytype) u16 { return @intCast(u16, 0xFFFF & val); }
 fn HIWORD(val: anytype) u16 { return LOWORD(val >> 16); }
-const SOCKET = usize;
 const INVALID_SOCKET = ~@as(usize, 0);
 const WSAGETSELECTEVENT = LOWORD;
 const WSAGETSELECTERROR = HIWORD;
@@ -276,7 +276,7 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) !void {
     while (true) {
         const result = MsgWaitForMultipleObjects(
             handles.len, handles.ptr, FALSE,
-            win32.api.windows_programming.INFINITE,
+            win32.system.windows_programming.INFINITE,
             QS_ALLINPUT);
         if (result == @enumToInt(WAIT_OBJECT_0) + handles.len) {
             // TODO: should I use a PeekMessage loop here instead?
@@ -976,14 +976,14 @@ fn startConnect2(addr: *const std.net.Ip4Address, s: SOCKET) !void {
 // Success if global.conn.sock != INVALID_SOCKET
 fn startConnect(addr: *const std.net.Ip4Address) void {
     switch (global.conn) { .None => {}, else => @panic("codebug") }
-    const s = socket(std.os.AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    const s = socket(std.os.AF_INET, SOCK_STREAM, @enumToInt(IPPROTO.TCP));
     if (s == INVALID_SOCKET) {
         panicf("socket function failed, error={}", .{GetLastError()});
         //return; // fail because global.conn.sock is still INVALID_SOCKET
     }
     {
         var nodelay: u8 = 1;
-        if (0 != setsockopt(s, IPPROTO_TCP, TCP_NODELAY, @ptrCast([*:0]u8, &nodelay), @sizeOf(@TypeOf(nodelay))))
+        if (0 != setsockopt(s, @enumToInt(IPPROTO.TCP), TCP_NODELAY, @ptrCast([*:0]u8, &nodelay), @sizeOf(@TypeOf(nodelay))))
             panicf("failed to set tcp nodelay, error={}", .{WSAGetLastError()});
     }
     if (startConnect2(addr, s)) {

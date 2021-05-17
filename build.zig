@@ -8,9 +8,9 @@ pub fn build(b: *std.build.Builder) !void {
 
     const zigwin32_index_file = try (GitRepo {
         .url = "https://github.com/marlersoft/zigwin32",
-        .branch = "10.0.19041.166-preview",
-        .sha = "f05dd1935e2916810279e12f2f3be2a0800538e5",
-    }).resolveOneFile(b.allocator, "src" ++ std.fs.path.sep_str ++ "win32.zig");
+        .branch = "10.0.19041.202-preview",
+        .sha = "515127e2ae7263c41b14f4bef0ccf143240e10fd",
+    }).resolveOneFile(b.allocator, "win32.zig");
 
     {
         const exe = b.addExecutable("wrc-client", "wrc-client.zig");
