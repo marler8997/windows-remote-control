@@ -21,7 +21,7 @@ const common = @import("common.zig");
 // Stuff that is missing from the zigwin32 bindings
 fn LOWORD(val: anytype) u16 { return @intCast(u16, 0xFFFF & val); }
 fn HIWORD(val: anytype) u16 { return LOWORD(val >> 16); }
-const INVALID_SOCKET = ~@as(usize, 0);
+const INVALID_SOCKET = std.os.windows.ws2_32.INVALID_SOCKET;
 const WSAGETSELECTEVENT = LOWORD;
 const WSAGETSELECTERROR = HIWORD;
 
@@ -582,7 +582,7 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
                 panicf("unexpected udp socket event {}", .{event});
             var from: std.net.Address = undefined;
             var buf: [proto.max_udp_msg]u8 = undefined;
-            const len = common.recvFrom(wParam, &buf, &from);
+            const len = common.recvFrom(@intToPtr(SOCKET, wParam), &buf, &from);
             if (len <= 0) {
                 log("recv on udp socket returned {}, error={}", .{len, GetLastError()});
                 panicf("TODO: implement udp socket re-initialization?", .{});

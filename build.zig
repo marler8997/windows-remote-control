@@ -9,7 +9,7 @@ pub fn build(b: *std.build.Builder) !void {
     const zigwin32_index_file = try (GitRepo {
         .url = "https://github.com/marlersoft/zigwin32",
         .branch = "10.0.19041.202-preview",
-        .sha = "515127e2ae7263c41b14f4bef0ccf143240e10fd",
+        .sha = "ee36e22f16e08045ba0cbfefa1121122bb2b9566",
     }).resolveOneFile(b.allocator, "win32.zig");
 
     {

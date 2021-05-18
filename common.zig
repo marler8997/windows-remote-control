@@ -54,7 +54,7 @@ pub fn createBroadcastSocket() !SOCKET {
         const addr = std.net.Address.parseIp4("0.0.0.0", proto.broadcast_port) catch unreachable;
         try std.os.bind(s, @ptrCast(*const std.os.sockaddr, &addr), addr.getOsSockLen());
     }
-    return @ptrToInt(s);
+    return s;
 }
 
 pub fn broadcastMyself(s: SOCKET) !void {
@@ -64,7 +64,7 @@ pub fn broadcastMyself(s: SOCKET) !void {
     //       If I do this, provide a UI that shows all the addresses
     //       we are broadcasting on
     const send_addr = std.net.Address.parseIp4("255.255.255.255", proto.broadcast_port) catch unreachable;
-    const sent = try std.os.sendto(@intToPtr(std.os.socket_t, s), msg, 0, &send_addr.any, send_addr.getOsSockLen());
+    const sent = try std.os.sendto(s, msg, 0, &send_addr.any, send_addr.getOsSockLen());
     std.debug.assert(sent == msg.len);
 }
 

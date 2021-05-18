@@ -16,7 +16,7 @@ const proto = @import("wrc-proto.zig");
 const common = @import("common.zig");
 
 // Stuff that is missing from the zigwin32 bindings
-const INVALID_SOCKET = ~@as(usize, 0);
+const INVALID_SOCKET = std.os.windows.ws2_32.INVALID_SOCKET;
 // NOTE: INPUT does not generate correctly yet because unions are implemented in zigwin32 yet
 const win_input = win32.ui.keyboard_and_mouse_input;
 const INPUT = extern struct {
@@ -251,7 +251,8 @@ fn handleListenSock(listen_sock: SOCKET, client: *Client) !void
 
 fn FD_ISSET(s: SOCKET, set: *const fd_set) bool {
     for (set.fd_array[0..set.fd_count]) |set_sock| {
-        if (set_sock == s)
+        // https://github.com/microsoft/win32metadata/issues/484
+        if (set_sock == @ptrToInt(s))
             return true;
     }
     return false;
@@ -263,10 +264,12 @@ fn serveLoop(listen_sock: SOCKET) !void {
     while (true) {
         var read_set: fd_set = undefined;
         read_set.fd_count = 1;
-        read_set.fd_array[0] = listen_sock;
+        // https://github.com/microsoft/win32metadata/issues/484
+        read_set.fd_array[0] = @ptrToInt(listen_sock);
         if (client.sock != INVALID_SOCKET) {
             read_set.fd_count += 1;
-            read_set.fd_array[1] = client.sock;
+            // https://github.com/microsoft/win32metadata/issues/484
+            read_set.fd_array[1] = @ptrToInt(client.sock);
         }
         const popped = select(0, &read_set, null, null, null);
         if (popped == SOCKET_ERROR) {
@@ -287,10 +290,6 @@ fn serveLoop(listen_sock: SOCKET) !void {
             try handleListenSock(listen_sock, &client);
         }
     }
-}
-
-fn asZigSock(s: SOCKET) std.os.windows.ws2_32.SOCKET {
-    return @intToPtr(std.os.windows.ws2_32.SOCKET, s);
 }
 
 pub fn main() !u8 {
@@ -322,11 +321,11 @@ fn main2() !void {
         return error.AlreadyReported;
     }
     // TODO: do I need to set reuseaddr socket option?
-    std.os.bind(asZigSock(s), &addr.any, addr.getOsSockLen()) catch |e| {
+    std.os.bind(s, &addr.any, addr.getOsSockLen()) catch |e| {
         std.log.err("bind to {} failed: {}", .{addr, e});
         return error.AlreadyReported;
     };
-    std.os.listen(asZigSock(s), 0) catch |e| {
+    std.os.listen(s, 0) catch |e| {
         std.log.err("listen failed: {}", .{e});
         return error.AlreadyReported;
     };
