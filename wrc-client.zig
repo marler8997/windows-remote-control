@@ -1012,22 +1012,22 @@ fn loadConfig(allocator: *std.mem.Allocator, filename: []const u8, config_file: 
 
     var root_it = tree.root.Object.iterator();
     while (root_it.next()) |entry| {
-        if (std.mem.eql(u8, entry.key, "remote_host")) {
-            switch (entry.value) {
+        if (std.mem.eql(u8, entry.key_ptr.*, "remote_host")) {
+            switch (entry.value_ptr.*) {
                 .String => |host| {
                     if (config.remote_host) |_|
                         panicf("in config file '{s}', got multiple values for remote_host", .{filename});
                     config.remote_host = allocator.dupe(u8, host) catch @panic("out of memory");
                 },
                 else => panicf("in config file '{s}', expected 'remote_host' to be of type String but got {s}", .{
-                    filename, @tagName(entry.value)}),
+                    filename, @tagName(entry.value_ptr.*)}),
             }
-        } else if (std.mem.eql(u8, entry.key, "mouse_portal_direction")) {
-            panicf("{s} not implemented", .{entry.key});
-        } else if (std.mem.eql(u8, entry.key, "mouse_portal_offset")) {
-            panicf("{s} not implemented", .{entry.key});
+        } else if (std.mem.eql(u8, entry.key_ptr.*, "mouse_portal_direction")) {
+            panicf("{s} not implemented", .{entry.key_ptr.*});
+        } else if (std.mem.eql(u8, entry.key_ptr.*, "mouse_portal_offset")) {
+            panicf("{s} not implemented", .{entry.key_ptr.*});
         } else {
-            panicf("config file '{s}' contains unknown property '{s}'", .{filename, entry.key});
+            panicf("config file '{s}' contains unknown property '{s}'", .{filename, entry.key_ptr.*});
         }
     }
 
