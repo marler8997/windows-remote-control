@@ -1,7 +1,7 @@
 const std = @import("std");
 const win32 = @import("win32");
+usingnamespace win32.foundation;
 usingnamespace win32.system.system_services;
-usingnamespace win32.system.diagnostics.debug;
 usingnamespace win32.ui.display_devices;
 usingnamespace win32.ui.windows_and_messaging;
 usingnamespace win32.networking.win_sock;

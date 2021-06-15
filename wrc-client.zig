@@ -6,7 +6,7 @@ const WINAPI = std.os.windows.WINAPI;
 
 const win32 = @import("win32");
 usingnamespace win32.zig;
-usingnamespace win32.system.diagnostics.debug;
+usingnamespace win32.foundation;
 usingnamespace win32.system.system_services;
 usingnamespace win32.ui.windows_and_messaging;
 usingnamespace win32.graphics.gdi;
@@ -14,6 +14,8 @@ usingnamespace win32.ui.display_devices;
 usingnamespace win32.networking.win_sock;
 usingnamespace win32.ui.keyboard_and_mouse_input;
 usingnamespace win32.system.threading;
+
+const GetLastError = win32.system.diagnostics.debug.GetLastError;
 
 const proto = @import("wrc-proto.zig");
 const common = @import("common.zig");
@@ -156,7 +158,7 @@ fn getCursorPos() POINT {
 }
 
 
-pub export fn wWinMain(hInstance: HINSTANCE, removeme: HINSTANCE, pCmdLine: [*:0]u16, nCmdShow: c_int) callconv(WINAPI) c_int {
+pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, pCmdLine: [*:0]u16, nCmdShow: c_int) callconv(WINAPI) c_int {
     main2(hInstance, @intCast(u32, nCmdShow)) catch |e| panicf("fatal error {}", .{e});
     return 0;
 }
@@ -399,8 +401,7 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
             // TODO: create font once?
             const font = CreateFontA(font_height, 0, 0, 0, 0, TRUE, 0, 0, 0,
                 .DEFAULT_PRECIS, .DEFAULT_PRECIS,
-                .DEFAULT_QUALITY, .DONTCARE, "Courier New");
-            std.debug.assert(font != null);
+                .DEFAULT_QUALITY, .DONTCARE, "Courier New") orelse @panic("CreateFontA");
             defer std.debug.assert(0 != DeleteObject(font));
 
             _ = SelectObject(hdc, font);

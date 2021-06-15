@@ -6,6 +6,7 @@ const WINAPI = std.os.windows.WINAPI;
 
 const win32 = @import("win32");
 usingnamespace win32.zig;
+usingnamespace win32.foundation;
 usingnamespace win32.system.diagnostics.debug;
 usingnamespace win32.system.system_services;
 usingnamespace win32.ui.windows_and_messaging;
@@ -251,8 +252,7 @@ fn handleListenSock(listen_sock: SOCKET, client: *Client) !void
 
 fn FD_ISSET(s: SOCKET, set: *const fd_set) bool {
     for (set.fd_array[0..set.fd_count]) |set_sock| {
-        // https://github.com/microsoft/win32metadata/issues/484
-        if (set_sock == @ptrToInt(s))
+        if (set_sock == s)
             return true;
     }
     return false;
@@ -264,12 +264,10 @@ fn serveLoop(listen_sock: SOCKET) !void {
     while (true) {
         var read_set: fd_set = undefined;
         read_set.fd_count = 1;
-        // https://github.com/microsoft/win32metadata/issues/484
-        read_set.fd_array[0] = @ptrToInt(listen_sock);
+        read_set.fd_array[0] = listen_sock;
         if (client.sock != INVALID_SOCKET) {
             read_set.fd_count += 1;
-            // https://github.com/microsoft/win32metadata/issues/484
-            read_set.fd_array[1] = @ptrToInt(client.sock);
+            read_set.fd_array[1] = client.sock;
         }
         const popped = select(0, &read_set, null, null, null);
         if (popped == SOCKET_ERROR) {

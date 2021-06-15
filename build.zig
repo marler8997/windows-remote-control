@@ -8,8 +8,8 @@ pub fn build(b: *std.build.Builder) !void {
 
     const zigwin32_index_file = try (GitRepo {
         .url = "https://github.com/marlersoft/zigwin32",
-        .branch = "10.0.19041.202-preview",
-        .sha = "ee36e22f16e08045ba0cbfefa1121122bb2b9566",
+        .branch = "10.2.84-preview",
+        .sha = "06a3689a328aa8681bd747e09eee47b932fa28f8",
     }).resolveOneFile(b.allocator, "win32.zig");
 
     {
