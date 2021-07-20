@@ -4,12 +4,10 @@ pub fn build(b: *std.build.Builder) !void {
     const target = b.standardTargetOptions(.{});
     const mode = b.standardReleaseOptions();
 
-    const flags = [_][]const u8 {"-D_UNICODE", "-DUNICODE"};
-
     const zigwin32_index_file = try (GitRepo {
         .url = "https://github.com/marlersoft/zigwin32",
-        .branch = "10.2.84-preview",
-        .sha = "06a3689a328aa8681bd747e09eee47b932fa28f8",
+        .branch = "10.2.118-preview",
+        .sha = "853c50c73a7ed8259f90a8706be876c062c740c3",
     }).resolveOneFile(b.allocator, "win32.zig");
 
     {
@@ -58,7 +56,7 @@ pub const GitRepo = struct {
         };
         errdefer allocator.free(path);
 
-        std.fs.accessAbsolute(path, std.fs.File.OpenFlags { .read = true }) catch |err| {
+        std.fs.accessAbsolute(path, std.fs.File.OpenFlags { .read = true }) catch {
             std.debug.print("Error: repository '{s}' does not exist\n", .{path});
             std.debug.print("       Run the following to clone it:\n", .{});
             const branch_args = if (self.branch) |b| &[2][]const u8 {" -b ", b} else &[2][]const u8 {"", ""};

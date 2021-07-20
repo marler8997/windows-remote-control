@@ -8,9 +8,6 @@ usingnamespace win32.networking.win_sock;
 
 const proto = @import("wrc-proto.zig");
 
-// Stuff that is missing from the zigwin32 bindings
-const INVALID_SOCKET = ~@as(usize, 0);
-
 // NOTE: this should be in win32, maybe in win32.zig?
 fn MAKEWORD(low: u8, high: u8) u16 {
     return @intCast(u16, low) | (@intCast(u16, high) << 8);
@@ -38,7 +35,7 @@ pub fn setBlocking(s: SOCKET) !void {
 }
 
 pub fn createBroadcastSocket() !SOCKET {
-    const s = try std.os.socket(std.os.AF_INET, SOCK_DGRAM | std.os.SOCK_NONBLOCK, @enumToInt(IPPROTO.UDP));
+    const s = try std.os.socket(std.os.AF_INET, @intCast(u32, SOCK_DGRAM) | std.os.SOCK_NONBLOCK, @enumToInt(IPPROTO.UDP));
     errdefer std.os.closeSocket(s);
 
     {

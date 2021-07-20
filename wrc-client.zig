@@ -23,7 +23,6 @@ const common = @import("common.zig");
 // Stuff that is missing from the zigwin32 bindings
 fn LOWORD(val: anytype) u16 { return @intCast(u16, 0xFFFF & val); }
 fn HIWORD(val: anytype) u16 { return LOWORD(val >> 16); }
-const INVALID_SOCKET = std.os.windows.ws2_32.INVALID_SOCKET;
 const WSAGETSELECTEVENT = LOWORD;
 const WSAGETSELECTERROR = HIWORD;
 
@@ -159,6 +158,7 @@ fn getCursorPos() POINT {
 
 
 pub export fn wWinMain(hInstance: HINSTANCE, _: ?HINSTANCE, pCmdLine: [*:0]u16, nCmdShow: c_int) callconv(WINAPI) c_int {
+    _ = pCmdLine;
     main2(hInstance, @intCast(u32, nCmdShow)) catch |e| panicf("fatal error {}", .{e});
     return 0;
 }
@@ -248,7 +248,7 @@ fn main2(hInstance: HINSTANCE, nCmdShow: u32) !void {
     log("starting connect...", .{});
     {
         const port = 1234;
-        const addr = std.net.Ip4Address.parse(global.config.remote_host.?, 1234) catch |e| {
+        const addr = std.net.Ip4Address.parse(global.config.remote_host.?, port) catch |e| {
             panicf("failed to parse remote host '{s}' as an IP: {}", .{
                 global.config.remote_host.?, e});
         };
@@ -315,6 +315,7 @@ fn fatalErrorMessageBox(msg: [:0]const u8, caption: [:0]const u8) void {
 }
 
 pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace) noreturn {
+    _ = error_return_trace;
     const msg_null_term = std.heap.page_allocator.dupeZ(u8, msg) catch "unable to allocate memory for panic msg";
     fatalErrorMessageBox(msg_null_term, "Windows Remote Control Client");
     std.os.abort();
@@ -393,7 +394,8 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
         },
         WM_PAINT => {
             var ps: PAINTSTRUCT = undefined;
-            const hdc = BeginPaint(hwnd, &ps);
+            const hdc = BeginPaint(hwnd, &ps) orelse
+                std.debug.panic("BeginPaint failed with {}", .{GetLastError});
             defer {
                 const result = EndPaint(hwnd, &ps);
                 std.debug.assert(result != 0);
@@ -927,7 +929,8 @@ fn restoreMouseCursor(ready: *Conn.Ready) void {
 fn createBroadcastSocket() error{AlreadyReported}!void {
     std.debug.assert(global.udp_sock == null);
     const s = socket(std.os.AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (s == INVALID_SOCKET) {
+    // workaround https://github.com/microsoft/win32metadata/issues/583
+    if (s == @intToPtr(SOCKET, INVALID_SOCKET)) {
         panicf("failed to create broadcast udp socket, error={}", .{GetLastError()});
     }
     errdefer {
@@ -940,7 +943,7 @@ fn createBroadcastSocket() error{AlreadyReported}!void {
             panicf("failed to bind broadcast udp socket to {}, error={}", .{addr, GetLastError()});
         }
     }
-    common.setNonBlocking(s) catch |_| {
+    common.setNonBlocking(s) catch {
         panicf("failed to set broadcast udp socket to non-blocking, error={}", .{GetLastError()});
     };
     if (0 != WSAAsyncSelect(s, global.hwnd, WM_USER_UDP_SOCKET, FD_READ)) {
@@ -950,7 +953,7 @@ fn createBroadcastSocket() error{AlreadyReported}!void {
 }
 
 fn startConnect2(addr: *const std.net.Ip4Address, s: SOCKET) !void {
-    common.setNonBlocking(s) catch |_| {
+    common.setNonBlocking(s) catch {
         panicf("failed to set socket to non-blocking, error={}", .{GetLastError()});
         //return error.ConnnectFail;
     };
@@ -978,7 +981,8 @@ fn startConnect2(addr: *const std.net.Ip4Address, s: SOCKET) !void {
 fn startConnect(addr: *const std.net.Ip4Address) void {
     switch (global.conn) { .None => {}, else => @panic("codebug") }
     const s = socket(std.os.AF_INET, SOCK_STREAM, @enumToInt(IPPROTO.TCP));
-    if (s == INVALID_SOCKET) {
+    // workaround https://github.com/microsoft/win32metadata/issues/583
+    if (s == @intToPtr(SOCKET, INVALID_SOCKET)) {
         panicf("socket function failed, error={}", .{GetLastError()});
         //return; // fail because global.conn.sock is still INVALID_SOCKET
     }
@@ -1047,6 +1051,8 @@ const PointFormatter = struct {
         options: std.fmt.FormatOptions,
         writer: anytype,
     ) !void {
+        _ = fmt;
+        _ = options;
         try printPoint(writer, self.point);
     }
 };
@@ -1062,6 +1068,8 @@ const OptPointFormatter = struct {
         options: std.fmt.FormatOptions,
         writer: anytype,
     ) !void {
+        _ = fmt;
+        _ = options;
         if (self.opt_point) |point| {
             try printPoint(writer, point);
         } else {
