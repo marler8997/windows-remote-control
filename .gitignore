@@ -1,4 +1,5 @@
 /out/
 /dep/
 zig-cache/
+zig-out/
 *~

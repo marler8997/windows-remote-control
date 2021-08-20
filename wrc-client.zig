@@ -486,7 +486,7 @@ fn wndProc(hwnd: HWND , message: u32, wParam: WPARAM, lParam: LPARAM) callconv(W
             return 0;
         },
         WM_KEYDOWN => {
-            if (wParam == VK_ESCAPE) {
+            if (wParam == @enumToInt(VK_ESCAPE)) {
                 if (global.conn.isReady()) |ready_ref| {
                     if (ready_ref.control_enabled) {
                         restoreMouseCursor(ready_ref);
@@ -929,8 +929,7 @@ fn restoreMouseCursor(ready: *Conn.Ready) void {
 fn createBroadcastSocket() error{AlreadyReported}!void {
     std.debug.assert(global.udp_sock == null);
     const s = socket(std.os.AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    // workaround https://github.com/microsoft/win32metadata/issues/583
-    if (s == @intToPtr(SOCKET, INVALID_SOCKET)) {
+    if (s == INVALID_SOCKET) {
         panicf("failed to create broadcast udp socket, error={}", .{GetLastError()});
     }
     errdefer {
@@ -981,8 +980,7 @@ fn startConnect2(addr: *const std.net.Ip4Address, s: SOCKET) !void {
 fn startConnect(addr: *const std.net.Ip4Address) void {
     switch (global.conn) { .None => {}, else => @panic("codebug") }
     const s = socket(std.os.AF_INET, SOCK_STREAM, @enumToInt(IPPROTO.TCP));
-    // workaround https://github.com/microsoft/win32metadata/issues/583
-    if (s == @intToPtr(SOCKET, INVALID_SOCKET)) {
+    if (s == INVALID_SOCKET) {
         panicf("socket function failed, error={}", .{GetLastError()});
         //return; // fail because global.conn.sock is still INVALID_SOCKET
     }

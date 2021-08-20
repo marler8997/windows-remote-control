@@ -51,8 +51,7 @@ const Client = struct {
 
     pub fn initInvalid() Client {
         return .{
-            // workaround https://github.com/microsoft/win32metadata/issues/583
-            .sock = @intToPtr(SOCKET, INVALID_SOCKET),
+            .sock = INVALID_SOCKET,
             .leftover = undefined,
             .leftover_len = undefined,
             .mouse_point = undefined,
@@ -205,8 +204,7 @@ fn handleClientSock(client: *Client) void {
             error.RecvFailed => std.log.info("recv function failed with {}", .{GetLastError()}),
         }
         if (closesocket(client.sock) != 0) unreachable;
-        // workaround https://github.com/microsoft/win32metadata/issues/583
-        client.sock = @intToPtr(SOCKET, INVALID_SOCKET);
+        client.sock = INVALID_SOCKET;
         return;
     };
     //std.log.info("[DEBUG] got {} bytes", .{len});
@@ -214,8 +212,7 @@ fn handleClientSock(client: *Client) void {
     const processed = processClientData(client, buffer[0..total]) orelse {
         // error already logged
         if (closesocket(client.sock) != 0) unreachable;
-        // workaround https://github.com/microsoft/win32metadata/issues/583
-        client.sock = @intToPtr(SOCKET, INVALID_SOCKET);
+        client.sock = INVALID_SOCKET;
         return;
     };
     client.leftover_len = total - processed;
@@ -228,14 +225,12 @@ fn handleListenSock(listen_sock: SOCKET, client: *Client) !void
     var from: std.net.Address = undefined;
     var fromlen: i32 = @sizeOf(@TypeOf(from));
     const new_sock = accept(listen_sock, @ptrCast(*SOCKADDR, &from), &fromlen);
-    // workaround https://github.com/microsoft/win32metadata/issues/583
-    if (new_sock == @intToPtr(SOCKET, INVALID_SOCKET)) {
+    if (new_sock == INVALID_SOCKET) {
         std.log.err("accept function failed with {}", .{GetLastError()});
         return error.AlreadyReported;
     }
     std.log.info("accepted connection from {}", .{from});
-    // workaround https://github.com/microsoft/win32metadata/issues/583
-    if (client.sock == @intToPtr(SOCKET, INVALID_SOCKET)) {
+    if (client.sock == INVALID_SOCKET) {
         var msg: [8]u8 = undefined;
         std.mem.writeIntBig(i32, msg[0..4], global.screen_size.x);
         std.mem.writeIntBig(i32, msg[4..8], global.screen_size.y);
@@ -268,8 +263,7 @@ fn serveLoop(listen_sock: SOCKET) !void {
         var read_set: fd_set = undefined;
         read_set.fd_count = 1;
         read_set.fd_array[0] = listen_sock;
-        // workaround https://github.com/microsoft/win32metadata/issues/583
-        if (client.sock != @intToPtr(SOCKET, INVALID_SOCKET)) {
+        if (client.sock != INVALID_SOCKET) {
             read_set.fd_count += 1;
             read_set.fd_array[1] = client.sock;
         }
@@ -284,8 +278,7 @@ fn serveLoop(listen_sock: SOCKET) !void {
         }
 
         var handled: u8 = 0;
-        // workaround https://github.com/microsoft/win32metadata/issues/583
-        if (client.sock != @intToPtr(SOCKET, INVALID_SOCKET) and FD_ISSET(client.sock, &read_set)) {
+        if (client.sock != INVALID_SOCKET and FD_ISSET(client.sock, &read_set)) {
             handleClientSock(&client);
             handled += 1;
         }
@@ -319,8 +312,7 @@ fn main2() !void {
         return error.AlreadyReported;
     };
     const s = socket(addr.any.family, SOCK_STREAM, @enumToInt(IPPROTO.TCP));
-    // workaround https://github.com/microsoft/win32metadata/issues/583
-    if (s == @intToPtr(SOCKET, INVALID_SOCKET)) {
+    if (s == INVALID_SOCKET) {
         std.log.err("socket function failed with {}", .{GetLastError()});
         return error.AlreadyReported;
     }
