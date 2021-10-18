@@ -16,7 +16,7 @@ const win32 = struct {
     usingnamespace @import("win32").system.threading;
 };
 
-const GetLastError = win32.system.diagnostics.debug.GetLastError;
+const GetLastError = @import("win32").system.diagnostics.debug.GetLastError;
 
 const proto = @import("wrc-proto.zig");
 const common = @import("common.zig");
@@ -224,7 +224,7 @@ fn main2(hInstance: win32.HINSTANCE, nCmdShow: u32) !void {
             .hCursor        = win32.LoadCursor(null, win32.IDC_ARROW),
             .hbrBackground  = @intToPtr(win32.HBRUSH, @enumToInt(win32.COLOR_WINDOW)+1),
             .lpszMenuName   = win32.L("placeholder"), // can't pass null using zigwin32 bindings for some reason
-            .lpszClassName  = win32.WINDOW_CLASS,
+            .lpszClassName  = window_class,
             .hIconSm        = win32.LoadIcon(hInstance, win32.IDI_APPLICATION),
         };
         if (0 == win32.RegisterClassEx(&wc))
@@ -233,7 +233,7 @@ fn main2(hInstance: win32.HINSTANCE, nCmdShow: u32) !void {
 
     global.hwnd = win32.CreateWindowEx(
         @intToEnum(win32.WINDOW_EX_STYLE, 0),
-        win32.WINDOW_CLASS,
+        window_class,
         win32._T("Windows Remote Control Client"),
         win32.WS_OVERLAPPEDWINDOW,
         win32.CW_USEDEFAULT, win32.CW_USEDEFAULT,
@@ -279,7 +279,7 @@ fn main2(hInstance: win32.HINSTANCE, nCmdShow: u32) !void {
     while (true) {
         const result = win32.MsgWaitForMultipleObjects(
             handles.len, handles.ptr, win32.FALSE,
-            win32.system.windows_programming.INFINITE,
+            @import("win32").system.windows_programming.INFINITE,
             win32.QS_ALLINPUT);
         if (result == @enumToInt(win32.WAIT_OBJECT_0) + handles.len) {
             // TODO: should I use a PeekMessage loop here instead?
@@ -350,15 +350,15 @@ const render = struct {
 
     var static_drawn = false;
 
-    var conn_state = win32.GdiString {
+    var conn_state = ui.GdiString {
         .x = left_margin,
         .y = top_margin + 0 * ui.font_height,
     };
-    var local_info = win32.GdiString {
+    var local_info = ui.GdiString {
         .x = left_margin,
         .y = top_margin + 1 * ui.font_height,
     };
-    var remote_info = win32.GdiString {
+    var remote_info = ui.GdiString {
         .x = left_margin,
         .y = top_margin + 2 * ui.font_height,
     };
@@ -468,7 +468,7 @@ fn wndProc(hwnd: win32.HWND , message: u32, wParam: win32.WPARAM, lParam: win32.
 
             return 0;
         },
-        win32.WM_USER_DEFERRED_MOUSE_MOVE => {
+        WM_USER_DEFERRED_MOUSE_MOVE => {
             const msg_counter = global.deferred_mouse_move_msg orelse @panic("codebug");
             global.deferred_mouse_move_msg = null;
             if (global.deferred_mouse_move) |point| {
@@ -503,8 +503,8 @@ fn wndProc(hwnd: win32.HWND , message: u32, wParam: win32.WPARAM, lParam: win32.
             invalidateRect();
             return 0;
         },
-        win32.WM_USER_RC_SOCKET => {
-            const event = win32.WSAGETSELECTEVENT(lParam);
+        WM_USER_RC_SOCKET => {
+            const event = WSAGETSELECTEVENT(lParam);
             if (event == win32.FD_CLOSE) {
                 log("socket closed", .{});
                 global.conn.closeSocketAndReset();
@@ -514,7 +514,7 @@ fn wndProc(hwnd: win32.HWND , message: u32, wParam: win32.WPARAM, lParam: win32.
                     .Connecting => &global.conn.Connecting,
                     else => @panic("codebug?"),
                 };
-                const err = win32.WSAGETSELECTERROR(lParam);
+                const err = WSAGETSELECTERROR(lParam);
                 if (err != 0) {
                     log("socket connect failed", .{});
                     global.conn.closeSocketAndReset();
@@ -559,7 +559,7 @@ fn wndProc(hwnd: win32.HWND , message: u32, wParam: win32.WPARAM, lParam: win32.
                     log("got {} bytes but need 8 for screen size", .{c.recv_len});
                     return 0;
                 }
-                const screen_size = POINT {
+                const screen_size = win32.POINT {
                     .x = std.mem.readIntBig(i32, c.recv_buf[0..4]),
                     .y = std.mem.readIntBig(i32, c.recv_buf[4..8]),
                 };
@@ -575,18 +575,18 @@ fn wndProc(hwnd: win32.HWND , message: u32, wParam: win32.WPARAM, lParam: win32.
                 global.conn = next_conn;
             } else {
                 log("FATAL_ERROR(bug) socket event, expected {} or {} but got {}", .{
-                   FD_CLOSE, FD_CONNECT, event});
-                PostQuitMessage(1);
+                   win32.FD_CLOSE, win32.FD_CONNECT, event});
+                win32.PostQuitMessage(1);
             }
             return 0;
         },
-        win32.WM_USER_UDP_SOCKET => {
+        WM_USER_UDP_SOCKET => {
             const event = WSAGETSELECTEVENT(lParam);
-            if (event != FD_READ)
+            if (event != win32.FD_READ)
                 panicf("unexpected udp socket event {}", .{event});
             var from: std.net.Address = undefined;
             var buf: [proto.max_udp_msg]u8 = undefined;
-            const len = common.recvFrom(@intToPtr(SOCKET, wParam), &buf, &from);
+            const len = common.recvFrom(@intToPtr(win32.SOCKET, wParam), &buf, &from);
             if (len <= 0) {
                 log("recv on udp socket returned {}, error={}", .{len, GetLastError()});
                 panicf("TODO: implement udp socket re-initialization?", .{});
@@ -595,14 +595,14 @@ fn wndProc(hwnd: win32.HWND , message: u32, wParam: win32.WPARAM, lParam: win32.
             return 0;
         },
         win32.WM_DESTROY => {
-            PostQuitMessage(0);
+            win32.PostQuitMessage(0);
             return 0;
         },
-        else => return DefWindowProc(hwnd, message, wParam, lParam),
+        else => return win32.DefWindowProc(hwnd, message, wParam, lParam),
     }
 }
 
-const WINDOW_CLASS = win32._T("WindowsRemoteControlClient");
+const window_class = win32._T("WindowsRemoteControlClient");
 
 
 fn globalSockSendFull(remote: *Conn.Ready, buf: []const u8) void {
@@ -722,7 +722,7 @@ fn mouseProc(code: i32, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(WIN
         return win32.CallNextHookEx(null, code, wParam, lParam);
     }
 
-    if (code == HC_ACTION) {
+    if (code == win32.HC_ACTION) {
         global.mouse_msg_hc_action += 1;
         invalidateRect();
         if (wParam == win32.WM_MOUSEMOVE) {
@@ -731,11 +731,11 @@ fn mouseProc(code: i32, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(WIN
             global.local_mouse.last_cursor_pos = getCursorPos();
             //log("[DEBUG] mousemove {}", .{fmtPoint(data.pt)});
             if (global.conn.controlEnabled()) |remote_ref| {
-                const diff = POINT {
+                const diff = win32.POINT {
                     .x = data.pt.x - global.local_mouse.last_cursor_pos.?.x,
                     .y = data.pt.y - global.local_mouse.last_cursor_pos.?.y,
                 };
-                var next_remote_mouse_point = POINT {
+                var next_remote_mouse_point = win32.POINT {
                     .x = remote_ref.mouse_point.x + diff.x,
                     .y = remote_ref.mouse_point.y + diff.y,
                 };
@@ -747,7 +747,7 @@ fn mouseProc(code: i32, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(WIN
                     // NOTE: changing the current event and fowarding it doesn't seem to work
                     //data.pt = local_point;
                     //global.local_mouse_point = local_point;
-                    if (0 == SetCursorPos(local_point.x, local_point.y)) {
+                    if (0 == win32.SetCursorPos(local_point.x, local_point.y)) {
                         log("WARNING: failed to set cursor pos with {}", .{GetLastError()});
                     } else {
                         return 1; // swallow this event
@@ -813,7 +813,7 @@ fn mouseProc(code: i32, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(WIN
                 global.local_input.mouse_down[proto.mouse_button_right] = false;
             }
         } else if (wParam == win32.WM_MOUSEWHEEL) {
-            const data = @intToPtr(*MSLLHOOKSTRUCT, @bitCast(usize, lParam));
+            const data = @intToPtr(*win32.MSLLHOOKSTRUCT, @bitCast(usize, lParam));
             const delta = @bitCast(i16, HIWORD(@enumToInt(data.mouseData)));
             //log("[DEBUG] mousewheel {} (pt={})", .{delta, fmtPoint(data.pt)});
             if (global.conn.controlEnabled()) |remote_ref| {
@@ -825,7 +825,7 @@ fn mouseProc(code: i32, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(WIN
         } else {
             log("mouseProc: HC_ACTION unknown windows message {}", .{wParam});
         }
-    } else if (code == HC_NOREMOVE) {
+    } else if (code == win32.HC_NOREMOVE) {
         global.mouse_msg_hc_noremove += 1;
         invalidateRect();
     } else {
@@ -835,15 +835,15 @@ fn mouseProc(code: i32, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(WIN
     if (global.conn.controlEnabled()) |_| {
         return 1;
     }
-    return CallNextHookEx(null, code, wParam, lParam);
+    return win32.CallNextHookEx(null, code, wParam, lParam);
 }
-fn keyboardProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRESULT {
+fn keyboardProc(code: i32, wParam: win32.WPARAM, lParam: win32.LPARAM) callconv(WINAPI) win32.LRESULT {
     if (code < 0) {
-        return CallNextHookEx(null, code, wParam, lParam);
+        return win32.CallNextHookEx(null, code, wParam, lParam);
     }
-    if (code != HC_ACTION) {
+    if (code != win32.HC_ACTION) {
         log("WARNING: unknown WM_KEYBOARD_LL code {}", .{code});
-        return CallNextHookEx(null, code, wParam, lParam);
+        return win32.CallNextHookEx(null, code, wParam, lParam);
     }
     const KeyMsg = enum { keydown, keyup, syskeydown, syskeyup };
     const key_msg: KeyMsg = switch (wParam) {
@@ -853,15 +853,15 @@ fn keyboardProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRES
         win32.WM_SYSKEYUP => .syskeyup,
         else => {
             log("WARNING: keyboardProc unknown msg {}", .{wParam});
-            return CallNextHookEx(null, code, wParam, lParam);
+            return win32.CallNextHookEx(null, code, wParam, lParam);
         },
     };
     const down = switch (key_msg) {
         .keydown => true, .keyup => false, .syskeydown => true, .syskeyup => false,
     };
 
-    const data = @intToPtr(*KBDLLHOOKSTRUCT, @bitCast(usize, lParam));
-    const input_flags: u32 = if (down) 0 else @enumToInt(KEYEVENTF_KEYUP);
+    const data = @intToPtr(*win32.KBDLLHOOKSTRUCT, @bitCast(usize, lParam));
+    const input_flags: u32 = if (down) 0 else @enumToInt(win32.KEYEVENTF_KEYUP);
     //log("[DEBUG] keyboardProc code={} wParam={}({}) vk={} scan={} flags=0x{x}", .{
     //    code, key_msg, wParam, data.vkCode, data.scanCode, input_flags});
     if (global.conn.controlEnabled()) |remote_ref| {
@@ -874,7 +874,7 @@ fn keyboardProc(code: i32, wParam: WPARAM, lParam: LPARAM) callconv(WINAPI) LRES
         }
         return 1; // do not forward the event
     } else {
-        return CallNextHookEx(null, code, wParam, lParam);
+        return win32.CallNextHookEx(null, code, wParam, lParam);
     }
 }
 
@@ -882,10 +882,10 @@ fn hideMouseCursor(ready: *Conn.Ready) void {
     std.debug.assert(ready.hide_cursor_count == 0);
 
     {
-        var result = ShowCursor(FALSE);
+        var result = win32.ShowCursor(win32.FALSE);
         ready.hide_cursor_count += 1;
         while (result >= 0) {
-            const next = ShowCursor(FALSE);
+            const next = win32.ShowCursor(win32.FALSE);
             ready.hide_cursor_count += 1;
             std.debug.assert(next == result - 1);
             result = next;
@@ -906,53 +906,53 @@ fn hideMouseCursor(ready: *Conn.Ready) void {
 
     // move cursor to the middle of my window so I can hide it
     {
-        var window_rect: RECT = undefined;
-        std.debug.assert(0 != GetWindowRect(global.hwnd, &window_rect));
-        var cursor_pos = POINT {
+        var window_rect: win32.RECT = undefined;
+        std.debug.assert(0 != win32.GetWindowRect(global.hwnd, &window_rect));
+        var cursor_pos = win32.POINT {
             .x = window_rect.left + @divTrunc(window_rect.right - window_rect.left, 2),
             .y = window_rect.top + @divTrunc(window_rect.bottom - window_rect.top, 2),
         };
-        std.debug.assert(0 != SetCursorPos(cursor_pos.x, cursor_pos.y));
+        std.debug.assert(0 != win32.SetCursorPos(cursor_pos.x, cursor_pos.y));
     }
 }
 
 fn restoreMouseCursor(ready: *Conn.Ready) void {
-    var result = ShowCursor(TRUE);
+    var result = win32.ShowCursor(win32.TRUE);
     std.debug.assert(result == 0);
     ready.hide_cursor_count -= 1;
     while (ready.hide_cursor_count != 0) {
         result += 1;
-        std.debug.assert(result == ShowCursor(TRUE));
+        std.debug.assert(result == win32.ShowCursor(win32.TRUE));
         ready.hide_cursor_count -= 1;
     }
 }
 
 fn createBroadcastSocket() error{AlreadyReported}!void {
     std.debug.assert(global.udp_sock == null);
-    const s = socket(std.os.AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (s == INVALID_SOCKET) {
+    const s = win32.socket(std.os.AF_INET, win32.SOCK_DGRAM, win32.IPPROTO_UDP);
+    if (s == win32.INVALID_SOCKET) {
         panicf("failed to create broadcast udp socket, error={}", .{GetLastError()});
     }
     errdefer {
-        if (0 != closesocket(s)) unreachable;
+        if (0 != win32.closesocket(s)) unreachable;
     }
 
     {
         const addr = std.net.Address.parseIp4("0.0.0.0", proto.broadcast_port) catch unreachable;
-        if (0 != bind(s, @ptrCast(*const SOCKADDR, &addr), @sizeOf(@TypeOf(addr)))) {
+        if (0 != win32.bind(s, @ptrCast(*const win32.SOCKADDR, &addr), @sizeOf(@TypeOf(addr)))) {
             panicf("failed to bind broadcast udp socket to {}, error={}", .{addr, GetLastError()});
         }
     }
     common.setNonBlocking(s) catch {
         panicf("failed to set broadcast udp socket to non-blocking, error={}", .{GetLastError()});
     };
-    if (0 != WSAAsyncSelect(s, global.hwnd, WM_USER_UDP_SOCKET, FD_READ)) {
-        panicf("WSAAsyncSelect on broadcast udp failed, error={}", .{WSAGetLastError()});
+    if (0 != win32.WSAAsyncSelect(s, global.hwnd, WM_USER_UDP_SOCKET, win32.FD_READ)) {
+        panicf("WSAAsyncSelect on broadcast udp failed, error={}", .{win32.WSAGetLastError()});
     }
     global.udp_sock = s;
 }
 
-fn startConnect2(addr: *const std.net.Ip4Address, s: SOCKET) !void {
+fn startConnect2(addr: *const std.net.Ip4Address, s: win32.SOCKET) !void {
     common.setNonBlocking(s) catch {
         panicf("failed to set socket to non-blocking, error={}", .{GetLastError()});
         //return error.ConnnectFail;
@@ -961,39 +961,39 @@ fn startConnect2(addr: *const std.net.Ip4Address, s: SOCKET) !void {
     // I've moved the WSAAsyncSelect call to come before calling connect, this
     // seems to solve some sort of race condition where the connect message will
     // get dropped.
-    if (0 != WSAAsyncSelect(s, global.hwnd, WM_USER_RC_SOCKET, FD_CLOSE | FD_CONNECT| FD_READ)) {
-        panicf("WSAAsyncSelect failed, error={}", .{WSAGetLastError()});
+    if (0 != win32.WSAAsyncSelect(s, global.hwnd, WM_USER_RC_SOCKET, win32.FD_CLOSE | win32.FD_CONNECT| win32.FD_READ)) {
+        panicf("WSAAsyncSelect failed, error={}", .{win32.WSAGetLastError()});
         //return error.ConnnectFail;
     }
 
-    // I think we will always get an FD_CONNECT event
-    if (0 == connect(s, @ptrCast(*const SOCKADDR, addr), @sizeOf(@TypeOf(addr.*)))) {
+    // I think we will always get a win32.FD_CONNECT event
+    if (0 == win32.connect(s, @ptrCast(*const win32.SOCKADDR, addr), @sizeOf(@TypeOf(addr.*)))) {
         log("immediate connect!", .{});
     } else {
-        const lastError = WSAGetLastError();
-        if (lastError != WSAEWOULDBLOCK) {
+        const lastError = win32.WSAGetLastError();
+        if (lastError != win32.WSAEWOULDBLOCK) {
             panicf("connect to {} failed, error={}", .{addr, GetLastError()});
             //return error.ConnnectFail;
         }
     }
 }
-// Success if global.conn.sock != INVALID_SOCKET
+// Success if global.conn.sock != win32.INVALID_SOCKET
 fn startConnect(addr: *const std.net.Ip4Address) void {
     switch (global.conn) { .None => {}, else => @panic("codebug") }
-    const s = win32.socket(std.os.AF_INET, SOCK_STREAM, @enumToInt(IPPROTO.TCP));
-    if (s == INVALID_SOCKET) {
+    const s = win32.socket(std.os.AF.INET, win32.SOCK_STREAM, @enumToInt(win32.IPPROTO.TCP));
+    if (s == win32.INVALID_SOCKET) {
         panicf("socket function failed, error={}", .{GetLastError()});
-        //return; // fail because global.conn.sock is still INVALID_SOCKET
+        //return; // fail because global.conn.sock is still win32.INVALID_SOCKET
     }
     {
         var nodelay: u8 = 1;
-        if (0 != setsockopt(s, @enumToInt(IPPROTO.TCP), TCP_NODELAY, @ptrCast([*:0]u8, &nodelay), @sizeOf(@TypeOf(nodelay))))
-            panicf("failed to set tcp nodelay, error={}", .{WSAGetLastError()});
+        if (0 != win32.setsockopt(s, @enumToInt(win32.IPPROTO.TCP), win32.TCP_NODELAY, @ptrCast([*:0]u8, &nodelay), @sizeOf(@TypeOf(nodelay))))
+            panicf("failed to set tcp nodelay, error={}", .{win32.WSAGetLastError()});
     }
     if (startConnect2(addr, s)) {
         global.conn = .{ .Connecting = .{ .sock = s } }; // success
     } else |_| {
-        if (0 != closesocket(s)) unreachable; // fail because global.conn.sock is stil INVALID_SOCKET
+        if (0 != win32.closesocket(s)) unreachable; // fail because global.conn.sock is stil win32.INVALID_SOCKET
     }
 }
 

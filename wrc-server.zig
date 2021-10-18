@@ -4,20 +4,21 @@ pub const UNICODE = true;
 
 const WINAPI = std.os.windows.WINAPI;
 
-const win32 = @import("win32");
-usingnamespace win32.zig;
-usingnamespace win32.foundation;
-usingnamespace win32.system.diagnostics.debug;
-usingnamespace win32.system.system_services;
-usingnamespace win32.ui.windows_and_messaging;
-usingnamespace win32.networking.win_sock;
-usingnamespace win32.ui.display_devices;
+const win32 = struct {
+    usingnamespace @import("win32").zig;
+    usingnamespace @import("win32").foundation;
+    usingnamespace @import("win32").system.diagnostics.debug;
+    usingnamespace @import("win32").system.system_services;
+    usingnamespace @import("win32").ui.windows_and_messaging;
+    usingnamespace @import("win32").networking.win_sock;
+    usingnamespace @import("win32").ui.display_devices;
+};
 
 const proto = @import("wrc-proto.zig");
 const common = @import("common.zig");
 
 // NOTE: INPUT does not generate correctly yet because unions are implemented in zigwin32 yet
-const win_input = win32.ui.keyboard_and_mouse_input;
+const win_input = @import("win32").ui.keyboard_and_mouse_input;
 const INPUT = extern struct {
     type: win_input.INPUT_TYPE,
     data: extern union {
@@ -40,25 +41,25 @@ const INPUT = extern struct {
 };
 
 const global = struct {
-    pub var screen_size: POINT = undefined;
+    pub var screen_size: win32.POINT = undefined;
 };
 
 const Client = struct {
-    sock: SOCKET,
+    sock: win32.SOCKET,
     leftover: [proto.max_msg_data_len-1]u8,
     leftover_len: usize,
-    mouse_point: ?POINT,
+    mouse_point: ?win32.POINT,
 
     pub fn initInvalid() Client {
         return .{
-            .sock = INVALID_SOCKET,
+            .sock = win32.INVALID_SOCKET,
             .leftover = undefined,
             .leftover_len = undefined,
             .mouse_point = undefined,
         };
     }
 
-    pub fn setSock(self: *Client, sock: SOCKET) void {
+    pub fn setSock(self: *Client, sock: win32.SOCKET) void {
         self.sock = sock;
         self.leftover_len = 0;
         self.mouse_point = null;
@@ -72,8 +73,8 @@ fn processMessage(client: *Client, msg: proto.ClientToServerMsg, data: []const u
         const x = std.mem.readIntBig(i32, data[0..4]);
         const y = std.mem.readIntBig(i32, data[4..8]);
         // TODO: need a way to disable this, possibly with a key press
-        if (0 == SetCursorPos(x, y)) {
-            std.log.err("SetCursorPos {} {} failed with {}", .{x, y, GetLastError()});
+        if (0 == win32.SetCursorPos(x, y)) {
+            std.log.err("SetCursorPos {} {} failed with {}", .{x, y, win32.GetLastError()});
         }
         client.mouse_point = .{ .x = x, .y = y };
     },
@@ -117,7 +118,7 @@ fn processMessage(client: *Client, msg: proto.ClientToServerMsg, data: []const u
                 } },
             };
             if (1 != win_input.SendInput(1, @ptrCast([*]win_input.INPUT, &input), @sizeOf(INPUT))) {
-                std.log.err("SendInput failed with {}", .{GetLastError()});
+                std.log.err("SendInput failed with {}", .{win32.GetLastError()});
             }
         } else {
             std.log.info("dropping mouse button {} down={}, no mouse position", .{button, down});
@@ -140,7 +141,7 @@ fn processMessage(client: *Client, msg: proto.ClientToServerMsg, data: []const u
                 } },
             };
             if (1 != win_input.SendInput(1, @ptrCast([*]win_input.INPUT, &input), @sizeOf(INPUT))) {
-                std.log.err("SendInput failed with {}", .{GetLastError()});
+                std.log.err("SendInput failed with {}", .{win32.GetLastError()});
             }
         } else {
             std.log.info("dropping mouse wheel {}, no mouse position", .{delta});
@@ -163,7 +164,7 @@ fn processMessage(client: *Client, msg: proto.ClientToServerMsg, data: []const u
             } },
         };
         if (1 != win_input.SendInput(1, @ptrCast([*]win_input.INPUT, &input), @sizeOf(INPUT))) {
-            std.log.err("SendInput failed with {}", .{GetLastError()});
+            std.log.err("SendInput failed with {}", .{win32.GetLastError()});
         }
     },
     }
@@ -201,18 +202,18 @@ fn handleClientSock(client: *Client) void {
     const len = common.tryRecv(client.sock, buffer[client.leftover_len..]) catch |e| {
         switch (e) {
             error.SocketShutdown => std.log.info("client closed connection", .{}),
-            error.RecvFailed => std.log.info("recv function failed with {}", .{GetLastError()}),
+            error.RecvFailed => std.log.info("recv function failed with {}", .{win32.GetLastError()}),
         }
-        if (closesocket(client.sock) != 0) unreachable;
-        client.sock = INVALID_SOCKET;
+        if (win32.closesocket(client.sock) != 0) unreachable;
+        client.sock = win32.INVALID_SOCKET;
         return;
     };
     //std.log.info("[DEBUG] got {} bytes", .{len});
     const total = client.leftover_len + len;
     const processed = processClientData(client, buffer[0..total]) orelse {
         // error already logged
-        if (closesocket(client.sock) != 0) unreachable;
-        client.sock = INVALID_SOCKET;
+        if (win32.closesocket(client.sock) != 0) unreachable;
+        client.sock = win32.INVALID_SOCKET;
         return;
     };
     client.leftover_len = total - processed;
@@ -220,35 +221,35 @@ fn handleClientSock(client: *Client) void {
     @memcpy(&client.leftover, buffer.ptr + processed, client.leftover_len);
 }
 
-fn handleListenSock(listen_sock: SOCKET, client: *Client) !void
+fn handleListenSock(listen_sock: win32.SOCKET, client: *Client) !void
 {
     var from: std.net.Address = undefined;
     var fromlen: i32 = @sizeOf(@TypeOf(from));
-    const new_sock = accept(listen_sock, @ptrCast(*SOCKADDR, &from), &fromlen);
-    if (new_sock == INVALID_SOCKET) {
-        std.log.err("accept function failed with {}", .{GetLastError()});
+    const new_sock = win32.accept(listen_sock, @ptrCast(*win32.SOCKADDR, &from), &fromlen);
+    if (new_sock == win32.INVALID_SOCKET) {
+        std.log.err("accept function failed with {}", .{win32.GetLastError()});
         return error.AlreadyReported;
     }
     std.log.info("accepted connection from {}", .{from});
-    if (client.sock == INVALID_SOCKET) {
+    if (client.sock == win32.INVALID_SOCKET) {
         var msg: [8]u8 = undefined;
         std.mem.writeIntBig(i32, msg[0..4], global.screen_size.x);
         std.mem.writeIntBig(i32, msg[4..8], global.screen_size.y);
         common.sendFull(new_sock, &msg) catch {
-            std.log.err("failed to send screen size to client, error={}", .{GetLastError()});
-            _ = shutdown(new_sock, SD_BOTH);
-            if (closesocket(new_sock) != 0) unreachable;
+            std.log.err("failed to send screen size to client, error={}", .{win32.GetLastError()});
+            _ = win32.shutdown(new_sock, win32.SD_BOTH);
+            if (win32.closesocket(new_sock) != 0) unreachable;
         };
         // TODO: set socket to nonblocking??
         client.setSock(new_sock);
     } else {
         std.log.info("refusing new client (already have client)", .{});
-        _ = shutdown(new_sock, SD_BOTH);
-        if (closesocket(new_sock) != 0) unreachable;
+        _ = win32.shutdown(new_sock, win32.SD_BOTH);
+        if (win32.closesocket(new_sock) != 0) unreachable;
     }
 }
 
-fn FD_ISSET(s: SOCKET, set: *const fd_set) bool {
+fn FD_ISSET(s: win32.SOCKET, set: *const win32.fd_set) bool {
     for (set.fd_array[0..set.fd_count]) |set_sock| {
         if (set_sock == s)
             return true;
@@ -256,20 +257,20 @@ fn FD_ISSET(s: SOCKET, set: *const fd_set) bool {
     return false;
 }
 
-fn serveLoop(listen_sock: SOCKET) !void {
+fn serveLoop(listen_sock: win32.SOCKET) !void {
     var client = Client.initInvalid();
 
     while (true) {
-        var read_set: fd_set = undefined;
+        var read_set: win32.fd_set = undefined;
         read_set.fd_count = 1;
         read_set.fd_array[0] = listen_sock;
-        if (client.sock != INVALID_SOCKET) {
+        if (client.sock != win32.INVALID_SOCKET) {
             read_set.fd_count += 1;
             read_set.fd_array[1] = client.sock;
         }
-        const popped = select(0, &read_set, null, null, null);
-        if (popped == SOCKET_ERROR) {
-            std.log.err("select function failed with {}", .{GetLastError()});
+        const popped = win32.select(0, &read_set, null, null, null);
+        if (popped == win32.SOCKET_ERROR) {
+            std.log.err("select function failed with {}", .{win32.GetLastError()});
             return;
         }
         if (popped == 0) {
@@ -278,7 +279,7 @@ fn serveLoop(listen_sock: SOCKET) !void {
         }
 
         var handled: u8 = 0;
-        if (client.sock != INVALID_SOCKET and FD_ISSET(client.sock, &read_set)) {
+        if (client.sock != win32.INVALID_SOCKET and FD_ISSET(client.sock, &read_set)) {
             handleClientSock(&client);
             handled += 1;
         }
@@ -311,9 +312,9 @@ fn main2() !void {
         std.log.err("invalid ip address '{s}': {}", .{addr_string, e});
         return error.AlreadyReported;
     };
-    const s = socket(addr.any.family, SOCK_STREAM, @enumToInt(IPPROTO.TCP));
-    if (s == INVALID_SOCKET) {
-        std.log.err("socket function failed with {}", .{GetLastError()});
+    const s = win32.socket(addr.any.family, win32.SOCK_STREAM, @enumToInt(win32.IPPROTO.TCP));
+    if (s == win32.INVALID_SOCKET) {
+        std.log.err("socket function failed with {}", .{win32.GetLastError()});
         return error.AlreadyReported;
     }
     // TODO: do I need to set reuseaddr socket option?
@@ -326,7 +327,7 @@ fn main2() !void {
         return error.AlreadyReported;
     };
     common.setNonBlocking(s) catch {
-        std.log.err("ioctlsocket function to set non-blocking failed with {}", .{GetLastError()});
+        std.log.err("ioctlsocket function to set non-blocking failed with {}", .{win32.GetLastError()});
         return error.AlreadyReported;
     };
 
